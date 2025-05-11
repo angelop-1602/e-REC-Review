@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { collection, getDocs, query, where } from 'firebase/firestore';
+import { collection, getDocs } from 'firebase/firestore';
 import { db } from '@/lib/firebaseconfig';
 import Link from 'next/link';
 import { isOverdue, isDueSoon, formatDate, getFormTypeName } from '@/lib/utils';
@@ -12,18 +12,18 @@ interface Protocol {
   protocol_name: string;
   release_period: string;
   academic_level: string;
-  document_type: string;
-  due_date: string;
   reviewer: string;
   reviewers?: { 
     id: string;
     name: string;
     status: string;
-    document_type: string;
+    document_type?: string;
   }[];
+  due_date: string;
   status: string;
   protocol_file: string;
-  created_at: any;
+  document_type: string;
+  created_at: string;
 }
 
 export default function ReviewerDashboard() {
@@ -236,7 +236,7 @@ export default function ReviewerDashboard() {
             <div className="text-center py-8 bg-white rounded-lg shadow-md">
               <h3 className="text-xl font-semibold mb-2">No protocols found</h3>
               <p className="text-gray-600 mb-4">
-                You don't have any protocols assigned yet.
+                You don&apos;t have any protocols assigned yet.
               </p>
               {debugInfo && (
                 <div className="mt-4 p-4 bg-gray-50 rounded-lg mx-auto max-w-xl text-left">

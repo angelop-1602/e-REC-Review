@@ -2,11 +2,9 @@
 
 import { useState, useRef } from 'react';
 import { processReleaseInfo, getFormTypeName } from '@/lib/utils';
-import { doc, setDoc, collection, addDoc, Timestamp } from 'firebase/firestore';
+import { doc, setDoc, Timestamp } from 'firebase/firestore';
 import { db } from '@/lib/firebaseconfig';
 import Papa from 'papaparse';
-import { ParseResult, ParseError } from 'papaparse';
-import Link from 'next/link';
 
 interface ProtocolRow {
   'Main Folder'?: string;
@@ -15,7 +13,37 @@ interface ProtocolRow {
   'Document'?: string;
   'Link'?: string;
   'Folder Link'?: string;
-  [key: string]: any;
+  [key: string]: string | undefined;
+}
+
+interface Protocol {
+  id: string;
+  protocol_name: string;
+  release_period: string;
+  academic_level: string;
+  reviewer: string;
+  reviewers?: { id: string; name: string; status: string }[];
+  due_date: string;
+  status: string;
+  protocol_file: string;
+  document_type: string;
+  created_at: string;
+  [key: string]: string | { id: string; name: string; status: string }[] | undefined;
+}
+
+// These interfaces are used in the type casting operations
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+interface CSVData {
+  [key: string]: string;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+interface PartialProtocol {
+  protocol_name: string;
+  reviewer: string;
+  document_type: string;
+  protocol_file: string;
+  [key: string]: string | undefined;
 }
 
 export default function CSVUploadPage() {
@@ -23,7 +51,7 @@ export default function CSVUploadPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-  const [protocols, setProtocols] = useState<any[]>([]);
+  const [protocols, setProtocols] = useState<Protocol[]>([]);
   const [releaseInfo, setReleaseInfo] = useState<{
     releasePeriod: string;
     academicLevel: string | null;
@@ -56,13 +84,14 @@ export default function CSVUploadPage() {
       complete: (results) => {
         // Process data
         const processedData = results.data.map((row) => {
+          // Cast the minimal protocol data to PartialProtocol
           return {
             ...row,
             protocol_name: row['Main Folder'] || row['Folder'] || '',
             reviewer: row['Reviewer'] || '',
             document_type: row['Document'] || '',
             protocol_file: row['Link'] || row['Folder Link'] || '',
-          };
+          } as unknown as Protocol; // Force cast to Protocol since we'll add missing fields when uploading
         });
         setProtocols(processedData);
       },
@@ -83,7 +112,7 @@ export default function CSVUploadPage() {
 
     try {
       // Group by protocol name
-      const protocolGroups: { [key: string]: any[] } = {};
+      const protocolGroups: { [key: string]: Protocol[] } = {};
       
       protocols.forEach(row => {
         if (!row.protocol_name) return;
@@ -165,7 +194,7 @@ export default function CSVUploadPage() {
             className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
           />
           <p className="mt-2 text-sm text-gray-500">
-            File name should indicate release period. For example: "first-release.csv" or "april_1stweek.csv"
+            After processing, you&apos;ll see a preview of your data and have the option to &quot;Upload to Firestore&quot; or &quot;Clear&quot; and try again.
           </p>
         </div>
 

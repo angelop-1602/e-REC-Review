@@ -29,7 +29,7 @@ export default function ReassignProtocolPage() {
             The global protocol reassignment feature has been replaced with individual reviewer reassignment for better flexibility.
           </p>
           <p>
-            Please use the "Reassign" button next to each reviewer's name on the protocol details page.
+            Please use the &quot;Reassign&quot; button next to each reviewer&apos;s name on the protocol details page.
           </p>
         </div>
         

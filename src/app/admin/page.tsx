@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { collection, getDocs, query, where, orderBy, limit } from 'firebase/firestore';
+import { collection, getDocs } from 'firebase/firestore';
 import { db } from '@/lib/firebaseconfig';
 import Link from 'next/link';
 import { getFormTypeName } from '@/lib/utils';
@@ -75,8 +75,9 @@ export default function AdminDashboard() {
         }, {} as Record<string, Protocol[]>);
         
         // Create a grouped version of protocols (one entry per protocol_name)
-        const groupedProtocols = Object.entries(protocolGroups).map(([name, protocolItems]) => {
+        const groupedProtocols = Object.entries(protocolGroups).map((entry) => {
           // Use the first protocol as the base
+          const protocolItems = entry[1];
           const baseProtocol = protocolItems[0];
           
           // Count completed and total reviewers

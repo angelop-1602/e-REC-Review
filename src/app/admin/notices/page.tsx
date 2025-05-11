@@ -3,7 +3,6 @@
 import { useState, useEffect } from 'react';
 import { collection, addDoc, getDocs, query, orderBy, doc, deleteDoc, Timestamp, updateDoc, getDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebaseconfig';
-import Link from 'next/link';
 import { format } from 'date-fns';
 
 interface Notice {
@@ -11,8 +10,8 @@ interface Notice {
   title: string;
   content: string;
   priority: 'low' | 'medium' | 'high';
-  created_at: any;
-  expires_at: any;
+  created_at: Timestamp;
+  expires_at: Timestamp;
   likes?: string[]; // Array of reviewer IDs who liked this notice
 }
 
@@ -56,7 +55,7 @@ export default function AdminNoticesPage() {
     setExpiryDate(defaultExpiry.toISOString().split('T')[0]);
     
     fetchNotices();
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   
   const fetchNotices = async () => {
     try {
@@ -268,10 +267,9 @@ export default function AdminNoticesPage() {
     }
   };
   
-  const formatDateNice = (timestamp: any) => {
-    if (!timestamp || !timestamp.toDate) return 'Unknown';
-    const date = timestamp.toDate();
-    return format(date, 'MMM d, yyyy');
+  const formatDateNice = (timestamp: Timestamp) => {
+    if (!timestamp || !timestamp.toDate) return 'Invalid date';
+    return format(timestamp.toDate(), 'MMM d, yyyy h:mm a');
   };
   
   return (

@@ -1,5 +1,3 @@
-import AdminNav from '../AdminNav';
-
 export default function NoticesLayout({
   children,
 }: {

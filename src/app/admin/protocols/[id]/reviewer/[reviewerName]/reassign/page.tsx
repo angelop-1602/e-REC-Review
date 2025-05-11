@@ -2,15 +2,15 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter, useParams } from 'next/navigation';
-import { doc, getDoc, collection, getDocs, updateDoc, arrayUnion, Timestamp } from 'firebase/firestore';
+import { doc, getDoc, collection, getDocs, updateDoc, Timestamp } from 'firebase/firestore';
 import { db } from '@/lib/firebaseconfig';
 import Link from 'next/link';
 import { getFormTypeName } from '@/lib/utils';
 
-interface Reviewer {
+interface ReviewerData {
   id: string;
   name: string;
-  status?: string;
+  status: string;
   document_type?: string;
   due_date?: string;
 }
@@ -21,7 +21,7 @@ interface Protocol {
   release_period: string;
   academic_level: string;
   reviewer: string;
-  reviewers?: Reviewer[];
+  reviewers?: ReviewerData[];
   due_date: string;
   status: string;
   protocol_file: string;
@@ -30,7 +30,7 @@ interface Protocol {
   reassignment_history?: {
     from: string;
     to: string;
-    date: any;
+    date: Timestamp;
     reason: string;
   }[];
 }
@@ -42,8 +42,8 @@ export default function ReassignReviewerPage() {
   const router = useRouter();
   
   const [protocol, setProtocol] = useState<Protocol | null>(null);
-  const [currentReviewer, setCurrentReviewer] = useState<Reviewer | null>(null);
-  const [availableReviewers, setAvailableReviewers] = useState<Reviewer[]>([]);
+  const [currentReviewer, setCurrentReviewer] = useState<ReviewerData | null>(null);
+  const [availableReviewers, setAvailableReviewers] = useState<ReviewerData[]>([]);
   const [selectedReviewer, setSelectedReviewer] = useState<string>('');
   const [newDueDate, setNewDueDate] = useState<string>('');
   const [reassignmentReason, setReassignmentReason] = useState<string>('');
@@ -75,7 +75,7 @@ export default function ReassignReviewerPage() {
         setProtocol(protocolData);
         
         // Find the current reviewer in the protocol
-        let foundReviewer: Reviewer | null = null;
+        let foundReviewer: ReviewerData | null = null;
         
         if (protocolData.reviewers && protocolData.reviewers.length > 0) {
           foundReviewer = protocolData.reviewers.find(r => r.name === reviewerName) || null;
@@ -108,9 +108,9 @@ export default function ReassignReviewerPage() {
         const reviewersRef = collection(db, 'reviewers');
         const reviewersSnap = await getDocs(reviewersRef);
         
-        const reviewersData: Reviewer[] = [];
+        const reviewersData: ReviewerData[] = [];
         reviewersSnap.forEach((doc) => {
-          const reviewer = { id: doc.id, ...doc.data() } as Reviewer;
+          const reviewer = { id: doc.id, ...doc.data() } as ReviewerData;
           
           // Skip the current reviewer and any reviewers already assigned to this protocol
           if (reviewer.name !== reviewerName && 
@@ -171,7 +171,7 @@ export default function ReassignReviewerPage() {
       }
       
       // Create new reviewer object
-      const newReviewer: Reviewer = {
+      const newReviewer: ReviewerData = {
         id: newReviewerInfo.id || selectedReviewer,
         name: selectedReviewer,
         status: 'In Progress',

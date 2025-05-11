@@ -1,11 +1,11 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useRouter, useParams } from 'next/navigation';
+import { useParams } from 'next/navigation';
 import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebaseconfig';
 import Link from 'next/link';
-import { isOverdue, isDueSoon, getFormTypeName, getReviewerFormType } from '@/lib/utils';
+import { isOverdue, isDueSoon, getFormTypeName } from '@/lib/utils';
 
 interface Reviewer {
   id: string;
@@ -31,7 +31,7 @@ interface Protocol {
   reassignment_history?: {
     from: string;
     to: string;
-    date: any;
+    date: { toDate?: () => Date } | string;
     reason: string;
   }[];
   // Add new properties for grouped protocols
@@ -43,7 +43,6 @@ interface Protocol {
 export default function ProtocolDetailPage() {
   const params = useParams();
   const id = params.id as string;
-  const router = useRouter();
   const [protocol, setProtocol] = useState<Protocol | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -490,7 +489,11 @@ export default function ProtocolDetailPage() {
                 {protocol.reassignment_history.map((entry, index) => (
                   <tr key={index}>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {entry.date?.toDate ? entry.date.toDate().toLocaleDateString() : new Date(entry.date).toLocaleDateString()}
+                      {typeof entry.date === 'object' && entry.date?.toDate
+                        ? entry.date.toDate().toLocaleDateString()
+                        : typeof entry.date === 'string'
+                          ? new Date(entry.date).toLocaleDateString()
+                          : 'Invalid date'}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{entry.from}</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{entry.to}</td>

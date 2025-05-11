@@ -1,5 +1,3 @@
-import ReviewerNav from '../ReviewerNav';
-
 export default function NoticesLayout({
   children,
 }: {

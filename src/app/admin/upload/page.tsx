@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, ChangeEvent } from 'react';
-import { collection, doc, setDoc, writeBatch } from 'firebase/firestore';
+import { collection, doc, writeBatch } from 'firebase/firestore';
 import { db } from '@/lib/firebaseconfig';
 import { getFormTypeName } from '@/lib/utils';
 
@@ -122,13 +122,18 @@ interface MappedProtocol {
   created_at: string;
 }
 
+// Define types to replace any
+interface ParsedData {
+  [key: string]: string;
+}
+
 export default function CSVUploadPage() {
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-  const [parsedData, setParsedData] = useState<any[] | null>(null);
-  const [mappedData, setMappedData] = useState<any[] | null>(null);
+  const [parsedData, setParsedData] = useState<ParsedData[] | null>(null);
+  const [mappedData, setMappedData] = useState<MappedProtocol[] | null>(null);
   
   const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
@@ -162,7 +167,7 @@ export default function CSVUploadPage() {
         setParsedData(parsedCSV);
         
         // Map CSV data to protocol data structure
-        const protocols = parsedCSV.map(entry => 
+        const protocols = parsedCSV.map((entry) => 
           mapToProtocolData(entry, file.name)
         );
         
@@ -182,58 +187,6 @@ export default function CSVUploadPage() {
     };
     
     reader.readAsText(file);
-  };
-  
-  const processCSVData = (data: any[]) => {
-    if (!data || data.length === 0) {
-      setError('CSV file is empty or invalid');
-      return;
-    }
-    
-    try {
-      // Extract data from CSV
-      const mappedData: MappedProtocol[] = data.map((row, index) => {
-        // Generate a unique ID for this protocol
-        const protocol_name = row['Protocol Name'] || '';
-        const document_type = row['Document Type'] || '';
-        const reviewer = row['Reviewer'] || '';
-        
-        // Extract reviewer code from name or use as is if already a code
-        const reviewerCode = reviewer.split(' ').length > 1 
-          ? reviewer.split(' ').map((word: string) => word.charAt(0)).join('') // Get initials if it's a name
-          : reviewer; // Use as is if it looks like a code
-        
-        // Create a unique ID by combining protocol name, document type, and reviewer code
-        const id = `${protocol_name.replace(/\s+/g, '_')}_${document_type.replace(/\s+/g, '_')}_${reviewerCode}`;
-        
-        // Create a reviewer object with status
-        const reviewerObj = {
-          id: id,
-          name: reviewer,
-          status: 'In Progress' // Default status for each reviewer
-        };
-        
-        return {
-          id,
-          protocol_name,
-          release_period: row['Release Period'] || '',
-          academic_level: row['Academic Level'] || '',
-          reviewer, // Keep for backward compatibility
-          reviewers: [reviewerObj], // Add as an array with a single reviewer
-          due_date: row['Due Date'] || '',
-          status: row['Status'] || 'In Progress',
-          protocol_file: row['Protocol Link'] || '',
-          document_type,
-          created_at: new Date().toISOString()
-        };
-      });
-      
-      setMappedData(mappedData);
-      setSuccess(`CSV data processed successfully. ${mappedData.length} protocols ready to upload.`);
-    } catch (err) {
-      console.error('Error processing CSV data:', err);
-      setError('Failed to process CSV data. Please check the format.');
-    }
   };
   
   const uploadToFirebase = async () => {

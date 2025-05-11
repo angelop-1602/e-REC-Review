@@ -1,12 +1,13 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { collection, getDocs, query, orderBy, where } from 'firebase/firestore';
+import { collection, getDocs, query, orderBy } from 'firebase/firestore';
 import { db } from '@/lib/firebaseconfig';
 import Link from 'next/link';
 import { isOverdue, isDueSoon, formatDate, getFormTypeName } from '@/lib/utils';
 import NoticeAlert from '@/components/NoticeAlert';
 
+// Define a specific type for protocols
 interface Protocol {
   id: string;
   protocol_name: string;
@@ -17,13 +18,13 @@ interface Protocol {
     id: string;
     name: string;
     status: string;
-    document_type: string;
+    document_type?: string;
   }[];
   due_date: string;
   status: string;
   protocol_file: string;
   document_type: string;
-  created_at: any;
+  created_at: string;
 }
 
 export default function AdminDashboard() {

@@ -67,7 +67,7 @@ function findSaturdayOfWeek(year: number, monthIndex: number, weekNumber: number
   const firstDay = new Date(year, monthIndex, 1);
   
   // Find the first Saturday of the month
-  let firstSaturday = new Date(firstDay);
+  const firstSaturday = new Date(firstDay);
   const dayOfWeek = firstDay.getDay();
   const daysUntilSaturday = (6 - dayOfWeek + 7) % 7;
   firstSaturday.setDate(firstSaturday.getDate() + daysUntilSaturday);
@@ -143,8 +143,18 @@ export function getFormUrl(documentType: string): string {
   return formUrls[normalizedType] || '';
 }
 
+// Define Protocol interface for getReviewerFormType
+interface ReviewerProtocol {
+  document_type?: string;
+  reviewers?: {
+    id: string;
+    name: string;
+    document_type?: string;
+  }[];
+}
+
 // Unified function to get reviewer's document type from a protocol
-export function getReviewerFormType(protocol: any, reviewerId: string, reviewerName: string): {
+export function getReviewerFormType(protocol: ReviewerProtocol, reviewerId: string, reviewerName: string): {
   formType: string;
   formName: string;
   formUrl: string;

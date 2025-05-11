@@ -1,10 +1,9 @@
 'use client';
 
 import { useState } from 'react';
-import { collection, getDocs, query, where } from 'firebase/firestore';
+import { collection, getDocs, query, DocumentData } from 'firebase/firestore';
 import { db } from '@/lib/firebaseconfig';
 import { useRouter } from 'next/navigation';
-import Link from 'next/link';
 
 interface Reviewer {
   id: string;
@@ -14,7 +13,7 @@ interface Reviewer {
 interface Protocol {
   protocol_name: string;
   reviewer: string; // For backward compatibility
-  reviewers?: Reviewer[]; // New field for multiple reviewers
+  reviewers?: DocumentData[]; // New field for multiple reviewers
 }
 
 export default function HomePage() {
@@ -45,83 +44,83 @@ export default function HomePage() {
       
       console.log("Found protocols:", protocolsSnapshot.size);
       
-      // First look for a match in the reviewers array of each protocol
-      let foundReviewer: { id: string; name: string } | null = null;
+      let matchFound = false;
       
+      // Look for matches in protocols collection
       protocolsSnapshot.forEach(doc => {
         const protocol = doc.data() as Protocol;
         
         // Check in reviewers array (new structure)
-        if (protocol.reviewers && Array.isArray(protocol.reviewers)) {
-          for (const reviewer of protocol.reviewers) {
-            if ((reviewer.id && reviewer.id.toLowerCase() === reviewerInput.toLowerCase()) ||
-                (reviewer.name && 
-                 (reviewer.name.toLowerCase() === reviewerInput.toLowerCase() ||
-                  reviewer.name.toLowerCase().includes(reviewerInput.toLowerCase()) ||
-                  reviewerInput.toLowerCase().includes(reviewer.name.toLowerCase())))) {
-              console.log("Found reviewer in reviewers array:", reviewer);
-              foundReviewer = {
-                id: reviewer.id || reviewer.name,
-                name: reviewer.name
-              };
+        if (!matchFound && protocol.reviewers && Array.isArray(protocol.reviewers)) {
+          for (const reviewerItem of protocol.reviewers) {
+            // Extract id and name safely
+            const reviewerId = reviewerItem.id || reviewerItem.name || '';
+            const reviewerName = reviewerItem.name || reviewerItem.id || '';
+            
+            if ((reviewerId.toLowerCase() === reviewerInput.toLowerCase()) ||
+                (reviewerName.toLowerCase() === reviewerInput.toLowerCase() ||
+                 reviewerName.toLowerCase().includes(reviewerInput.toLowerCase()) ||
+                 reviewerInput.toLowerCase().includes(reviewerName.toLowerCase()))) {
+              console.log("Found reviewer in reviewers array:", reviewerItem);
+              
+              localStorage.setItem('reviewerId', reviewerId);
+              localStorage.setItem('reviewerName', reviewerName);
+              matchFound = true;
               break;
             }
           }
         }
         
         // If not found in reviewers array, check the reviewer field (old structure)
-        if (!foundReviewer && protocol.reviewer) {
+        if (!matchFound && protocol.reviewer) {
           if (protocol.reviewer.toLowerCase() === reviewerInput.toLowerCase() ||
               protocol.reviewer.toLowerCase().includes(reviewerInput.toLowerCase()) ||
               reviewerInput.toLowerCase().includes(protocol.reviewer.toLowerCase())) {
             console.log("Found reviewer in reviewer field:", protocol.reviewer);
-            foundReviewer = {
-              id: protocol.reviewer,
-              name: protocol.reviewer
-            };
+            
+            localStorage.setItem('reviewerId', protocol.reviewer);
+            localStorage.setItem('reviewerName', protocol.reviewer);
+            matchFound = true;
           }
         }
-      });
-      
-      if (foundReviewer) {
-        // Use the found reviewer info
-        localStorage.setItem('reviewerId', foundReviewer.id);
-        localStorage.setItem('reviewerName', foundReviewer.name);
-        router.push('/reviewer/dashboard');
-        return;
-      }
-      
-      // Then, check reviewers collection
-      const reviewersRef = collection(db, 'reviewers');
-      const allReviewersQuery = query(reviewersRef);
-      const allReviewers = await getDocs(allReviewersQuery);
-
-      console.log("Total reviewers in collection:", allReviewers.size);
-      
-      let matchFound = false;
-      
-      // Check for name match in reviewer documents
-      allReviewers.forEach(doc => {
-        const reviewerData = doc.data();
         
-        // Check if the input matches either the ID or name
-        if (doc.id.toLowerCase() === reviewerInput.toLowerCase() || 
-            (reviewerData.name && 
-             (reviewerData.name.toLowerCase() === reviewerInput.toLowerCase() ||
-              reviewerData.name.toLowerCase().includes(reviewerInput.toLowerCase()) ||
-              reviewerInput.toLowerCase().includes(reviewerData.name.toLowerCase())))) {
-          console.log("Found matching reviewer in reviewers collection:", doc.id);
-          
-          localStorage.setItem('reviewerId', doc.id);
-          localStorage.setItem('reviewerName', reviewerData.name || doc.id);
-          matchFound = true;
+        if (matchFound) {
           router.push('/reviewer/dashboard');
           return;
         }
       });
       
+      // If not found in protocols, check reviewers collection
       if (!matchFound) {
-        // If we got here, no match was found
+        const reviewersRef = collection(db, 'reviewers');
+        const allReviewersQuery = query(reviewersRef);
+        const allReviewers = await getDocs(allReviewersQuery);
+
+        console.log("Total reviewers in collection:", allReviewers.size);
+        
+        // Check for name match in reviewer documents
+        allReviewers.forEach(doc => {
+          const reviewerData = doc.data();
+          
+          // Check if the input matches either the ID or name
+          if (doc.id.toLowerCase() === reviewerInput.toLowerCase() || 
+              (reviewerData.name && 
+              (reviewerData.name.toLowerCase() === reviewerInput.toLowerCase() ||
+                reviewerData.name.toLowerCase().includes(reviewerInput.toLowerCase()) ||
+                reviewerInput.toLowerCase().includes(reviewerData.name.toLowerCase())))) {
+            console.log("Found matching reviewer in reviewers collection:", doc.id);
+            
+            localStorage.setItem('reviewerId', doc.id);
+            localStorage.setItem('reviewerName', reviewerData.name || doc.id);
+            matchFound = true;
+            router.push('/reviewer/dashboard');
+            return;
+          }
+        });
+      }
+      
+      // If we got here and no match was found
+      if (!matchFound) {
         setError('Reviewer ID or name not found. Please check and try again.');
       }
     } catch (err) {

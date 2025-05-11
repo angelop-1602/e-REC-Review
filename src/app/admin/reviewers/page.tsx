@@ -1,11 +1,9 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { collection, getDocs, doc, setDoc, writeBatch } from 'firebase/firestore';
+import { collection, getDocs, doc, writeBatch } from 'firebase/firestore';
 import { db } from '@/lib/firebaseconfig';
 import Link from 'next/link';
-import fs from 'fs/promises';
-import path from 'path';
 
 interface Reviewer {
   id: string;
@@ -244,7 +242,9 @@ export default function ReviewersPage() {
         {reviewers.length === 0 ? (
           <div className="text-center py-8">
             <p className="text-gray-500 mb-4">No reviewers found in the database.</p>
-            <p>Click the "Import Reviewers from JSON" button to import reviewers from the JSON file.</p>
+            <p className="text-gray-600 mt-2">
+              You&apos;ll need to create reviewers before they can be assigned to protocols. Click &quot;Add Reviewer&quot; to get started.
+            </p>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
