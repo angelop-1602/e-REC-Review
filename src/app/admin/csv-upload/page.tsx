@@ -15,22 +15,47 @@ interface ProtocolRow {
   'Document'?: string;
   'Link'?: string;
   'Folder Link'?: string;
+  
+  // New protocol fields
+  'SPUP REC Code'?: string;
+  'Principal Investigator'?: string;
+  'Research Title'?: string;
+  'Adviser'?: string;
+  'Course/Program'?: string;
+  'E Link'?: string;
+  'PRA1'?: string;
+  'PRA2'?: string;
+  'ICA'?: string;
+  'IACUC'?: string;
+  'IACUC2'?: string;
+  'CREF1'?: string;
+  'CREF2'?: string;
+  
   [key: string]: string | undefined;
 }
 
 interface Protocol {
-  id: string;
+  id: string; // Will use SPUP REC Code when available, otherwise auto-generated
   protocol_name: string;
   release_period: string;
   academic_level: string;
   reviewer: string;
-  reviewers?: { id: string; name: string; status: string; document_type?: string }[];
+  reviewers?: { id: string; name: string; status: string; form_type?: string }[];
   due_date: string;
   status: string;
   protocol_file: string;
   document_type: string;
   created_at: string;
-  [key: string]: string | { id: string; name: string; status: string; document_type?: string }[] | undefined;
+  
+  // New protocol fields
+  spup_rec_code?: string;
+  principal_investigator?: string;
+  research_title?: string;
+  adviser?: string;
+  course_program?: string;
+  e_link?: string;
+  
+  [key: string]: string | { id: string; name: string; status: string; form_type?: string }[] | undefined;
 }
 
 interface ReviewerInfo {
@@ -187,119 +212,223 @@ export default function CSVUploadPage() {
           return;
         }
         
-        // Validate required columns
-        const requiredColumns = ['Main Folder', 'Reviewer', 'Document', 'Link'];
-        const missingColumns = requiredColumns.filter(col => 
-          !results.meta.fields?.includes(col) && 
-          !(col === 'Main Folder' && results.meta.fields?.includes('Folder')) &&
-          !(col === 'Link' && results.meta.fields?.includes('Folder Link'))
-        );
+        // Detect CSV format by checking headers
+        const headers = results.meta.fields || [];
+        const isNewFormat = headers.includes('SPUP REC Code') || headers.includes('Research Title');
         
-        if (missingColumns.length > 0) {
-          showNotification('warning', 'Missing Columns', 
-            `The CSV is missing required columns: ${missingColumns.join(', ')}.`
-          );
+        if (isNewFormat) {
+          processNewFormatCSV(results.data);
+        } else {
+          processOldFormatCSV(results.data);
         }
-        
-        // Process data
-        const processedData = results.data
-          .filter(row => (row['Main Folder'] || row['Folder']) && row['Reviewer']) // Skip rows without protocol name or reviewer
-          .map((row) => {
-            return {
-              protocol_name: row['Main Folder'] || row['Folder'] || '',
-              reviewer: row['Reviewer'] || '',
-              document_type: row['Document'] || '',
-              protocol_file: row['Link'] || row['Folder Link'] || '',
-            } as PartialProtocol;
-          });
-        
-        // Group by protocol name to identify duplicates and multiple reviewers
-        const groupedData: { [protocolName: string]: PartialProtocol[] } = {};
-        processedData.forEach((item) => {
-          if (!groupedData[item.protocol_name]) {
-            groupedData[item.protocol_name] = [];
-          }
-          groupedData[item.protocol_name].push(item);
-        });
-        
-        // Create consolidated protocols with multiple reviewers if needed
-        const consolidatedProtocols: Protocol[] = [];
-        const now = new Date();
-        
-        // Track unique reviewers and their protocol counts
-        const reviewerCounts = new Map<string, number>();
-        
-        Object.entries(groupedData).forEach(([protocolName, items]) => {
-          // Base protocol with common data
-          const baseProtocol: Protocol = {
-            id: '', // This will be auto-generated
-            protocol_name: protocolName,
-            release_period: releaseInfo?.releasePeriod || 'Unknown',
-            academic_level: releaseInfo?.academicLevel || 'Unknown',
-            reviewer: '', // This will be overridden or used as fallback
-            due_date: customDueDate || releaseInfo?.dueDate || now.toISOString().split('T')[0],
-            status: 'In Progress',
-            protocol_file: '',
-            document_type: '',
-            created_at: now.toISOString(),
-          };
-          
-          if (items.length === 1) {
-            // Single reviewer case
-            const item = items[0];
-            baseProtocol.reviewer = item.reviewer;
-            baseProtocol.protocol_file = item.protocol_file;
-            baseProtocol.document_type = item.document_type;
-            
-            // Track reviewer count
-            const currentCount = reviewerCounts.get(item.reviewer) || 0;
-            reviewerCounts.set(item.reviewer, currentCount + 1);
-            
-            consolidatedProtocols.push(baseProtocol);
-          } else {
-            // Multiple reviewers case
-            baseProtocol.reviewer = items[0].reviewer; // Set first reviewer as fallback
-            baseProtocol.protocol_file = items[0].protocol_file;
-            baseProtocol.document_type = items[0].document_type;
-            
-            // Add all reviewers to the reviewers array
-            baseProtocol.reviewers = items.map(item => ({
-              id: item.reviewer,
-              name: item.reviewer,
-              status: 'In Progress',
-              document_type: item.document_type
-            }));
-            
-            // Track reviewer counts
-            items.forEach(item => {
-              const currentCount = reviewerCounts.get(item.reviewer) || 0;
-              reviewerCounts.set(item.reviewer, currentCount + 1);
-            });
-            
-            consolidatedProtocols.push(baseProtocol);
-          }
-        });
-        
-        // Convert reviewer counts to array for UI
-        const reviewerInfoArray: ReviewerInfo[] = Array.from(reviewerCounts).map(([id, count]) => ({
-          id,
-          name: id, // Use ID as name until we get proper names
-          protocols: count
-        }));
-        
-        setProtocols(consolidatedProtocols);
-        setReviewers(reviewerInfoArray);
-        
-        // Generate preview data (first 5 protocols)
-        setPreviewData(consolidatedProtocols.slice(0, 5));
-        
-        setLoading(false);
       },
       error: (error) => {
         showNotification('error', 'CSV Parsing Error', error.message);
         setLoading(false);
       }
     });
+  };
+
+  const processNewFormatCSV = (data: ProtocolRow[]) => {
+    // Validate required columns
+    const firstRow = data[0] || {};
+    const hasRequiredColumns = firstRow['SPUP REC Code'] !== undefined || 
+                            firstRow['Research Title'] !== undefined;
+    
+    if (!hasRequiredColumns) {
+      showNotification('warning', 'Missing Columns', 
+        'The CSV is missing required columns for the new format. Please check your file.'
+      );
+      setLoading(false);
+      return;
+    }
+    
+    // Process data
+    const processedProtocols = data
+      .filter(row => (row['SPUP REC Code'] || row['Research Title']) && row['E Link']) // Skip rows without required fields
+      .map((row) => {
+        const reviewerFormTypes = [
+          { field: 'PRA1', form: 'PRA1' },
+          { field: 'PRA2', form: 'PRA2' },
+          { field: 'ICA', form: 'ICA' },
+          { field: 'IACUC', form: 'IACUC' },
+          { field: 'IACUC2', form: 'IACUC2' },
+          { field: 'CREF1', form: 'CREF1' },
+          { field: 'CREF2', form: 'CREF2' }
+        ];
+        
+        // Extract reviewers from each form type field
+        const reviewers: { id: string; name: string; status: string; form_type: string }[] = [];
+        
+        for (const { field, form } of reviewerFormTypes) {
+          if (row[field] && row[field]?.trim() !== '') {
+            reviewers.push({
+              id: row[field] || '',
+              name: formatReviewerName(row[field] || ''),
+              status: 'In Progress',
+              form_type: form
+            });
+          }
+        }
+        
+        const now = new Date();
+        const protocolName = row['Research Title'] || row['SPUP REC Code'] || '';
+        
+        return {
+          id: row['SPUP REC Code'] || '', // Set ID to SPUP REC Code if available
+          protocol_name: protocolName,
+          spup_rec_code: row['SPUP REC Code'] || '',
+          principal_investigator: row['Principal Investigator'] || '',
+          research_title: row['Research Title'] || '',
+          adviser: row['Adviser'] || '',
+          course_program: row['Course/Program'] || '',
+          e_link: row['E Link'] || '',
+          release_period: releaseInfo?.releasePeriod || 'Unknown',
+          academic_level: releaseInfo?.academicLevel || 'Unknown',
+          reviewer: reviewers.length > 0 ? reviewers[0].id : '',
+          reviewers: reviewers,
+          due_date: customDueDate || releaseInfo?.dueDate || now.toISOString().split('T')[0],
+          status: 'In Progress',
+          protocol_file: row['E Link'] || row['Link'] || row['Folder Link'] || '',
+          document_type: '',
+          created_at: now.toISOString(),
+        } as Protocol;
+      });
+    
+    // Group reviewers by reviewer ID for display
+    const reviewerCounts = new Map<string, number>();
+    processedProtocols.forEach(protocol => {
+      if (protocol.reviewers && protocol.reviewers.length > 0) {
+        protocol.reviewers.forEach(reviewer => {
+          const currentCount = reviewerCounts.get(reviewer.id) || 0;
+          reviewerCounts.set(reviewer.id, currentCount + 1);
+        });
+      } else if (protocol.reviewer) {
+        const currentCount = reviewerCounts.get(protocol.reviewer) || 0;
+        reviewerCounts.set(protocol.reviewer, currentCount + 1);
+      }
+    });
+    
+    // Convert reviewer counts to array for UI
+    const reviewerInfoArray = Array.from(reviewerCounts).map(([id, count]) => ({
+      id,
+      name: existingReviewers.get(id) || id,
+      protocols: count
+    }));
+    
+    setProtocols(processedProtocols);
+    setReviewers(reviewerInfoArray);
+    setPreviewData(processedProtocols.slice(0, 5));
+    setLoading(false);
+    
+    showNotification('success', 'CSV Parsed', `Successfully parsed ${processedProtocols.length} protocols using new format.`);
+  };
+
+  const processOldFormatCSV = (data: ProtocolRow[]) => {
+    // Validate required columns
+    const requiredColumns = ['Main Folder', 'Reviewer', 'Document', 'Link'];
+    const missingColumns = requiredColumns.filter(col => 
+      !Object.keys(data[0] || {}).includes(col) && 
+      !(col === 'Main Folder' && Object.keys(data[0] || {}).includes('Folder')) &&
+      !(col === 'Link' && Object.keys(data[0] || {}).includes('Folder Link'))
+    );
+    
+    if (missingColumns.length > 0) {
+      showNotification('warning', 'Missing Columns', 
+        `The CSV is missing required columns: ${missingColumns.join(', ')}.`
+      );
+    }
+    
+    // Process data
+    const processedData = data
+      .filter(row => (row['Main Folder'] || row['Folder']) && row['Reviewer']) // Skip rows without protocol name or reviewer
+      .map((row) => {
+        return {
+          protocol_name: row['Main Folder'] || row['Folder'] || '',
+          reviewer: row['Reviewer'] || '',
+          document_type: row['Document'] || '',
+          protocol_file: row['Link'] || row['Folder Link'] || '',
+        } as PartialProtocol;
+      });
+    
+    // Group by protocol name to identify duplicates and multiple reviewers
+    const groupedData: { [protocolName: string]: PartialProtocol[] } = {};
+    processedData.forEach((item) => {
+      if (!groupedData[item.protocol_name]) {
+        groupedData[item.protocol_name] = [];
+      }
+      groupedData[item.protocol_name].push(item);
+    });
+    
+    // Create consolidated protocols with multiple reviewers if needed
+    const consolidatedProtocols: Protocol[] = [];
+    const now = new Date();
+    
+    // Track unique reviewers and their protocol counts
+    const reviewerCounts = new Map<string, number>();
+    
+    Object.entries(groupedData).forEach(([protocolName, items]) => {
+      // Base protocol with common data
+      const baseProtocol: Protocol = {
+        id: '', // This will be auto-generated
+        protocol_name: protocolName,
+        release_period: releaseInfo?.releasePeriod || 'Unknown',
+        academic_level: releaseInfo?.academicLevel || 'Unknown',
+        reviewer: '', // This will be overridden or used as fallback
+        due_date: customDueDate || releaseInfo?.dueDate || now.toISOString().split('T')[0],
+        status: 'In Progress',
+        protocol_file: '',
+        document_type: '',
+        created_at: now.toISOString(),
+      };
+      
+      if (items.length === 1) {
+        // Single reviewer case
+        const item = items[0];
+        baseProtocol.reviewer = item.reviewer;
+        baseProtocol.protocol_file = item.protocol_file;
+        baseProtocol.document_type = item.document_type;
+        
+        // Track reviewer count
+        const currentCount = reviewerCounts.get(item.reviewer) || 0;
+        reviewerCounts.set(item.reviewer, currentCount + 1);
+        
+        consolidatedProtocols.push(baseProtocol);
+      } else {
+        // Multiple reviewers case
+        baseProtocol.reviewer = items[0].reviewer; // Set first reviewer as fallback
+        baseProtocol.protocol_file = items[0].protocol_file;
+        baseProtocol.document_type = items[0].document_type;
+        
+        // Add all reviewers to the reviewers array
+        baseProtocol.reviewers = items.map(item => ({
+          id: item.reviewer,
+          name: item.reviewer,
+          status: 'In Progress',
+          document_type: item.document_type
+        }));
+        
+        // Track reviewer counts
+        items.forEach(item => {
+          const currentCount = reviewerCounts.get(item.reviewer) || 0;
+          reviewerCounts.set(item.reviewer, currentCount + 1);
+        });
+        
+        consolidatedProtocols.push(baseProtocol);
+      }
+    });
+    
+    // Convert reviewer counts to array for UI
+    const reviewerInfoArray = Array.from(reviewerCounts).map(([id, count]) => ({
+      id,
+      name: existingReviewers.get(id) || id,
+      protocols: count
+    }));
+    
+    setProtocols(consolidatedProtocols);
+    setReviewers(reviewerInfoArray);
+    setPreviewData(consolidatedProtocols.slice(0, 5));
+    setLoading(false);
   };
 
   const formatReviewerName = (reviewerId: string): string => {
@@ -349,8 +478,13 @@ export default function CSVUploadPage() {
         const currentBatchItems = protocols.slice(start, end);
         
         for (const protocol of currentBatchItems) {
-          // Create a new document with auto-generated ID
-          const docRef = doc(collection(db, 'protocols'));
+          // Create a document reference - use SPUP REC Code as ID if available, otherwise auto-generate
+          let docRef;
+          if (protocol.spup_rec_code && protocol.spup_rec_code.trim() !== '') {
+            docRef = doc(collection(db, 'protocols'), protocol.spup_rec_code);
+          } else {
+            docRef = doc(collection(db, 'protocols'));
+          }
           
           // Convert dates and timestamps
           const created = new Date();
@@ -358,7 +492,9 @@ export default function CSVUploadPage() {
           // Format the data for Firestore
           const protocolData = {
             ...protocol,
-            id: docRef.id,
+            id: protocol.spup_rec_code && protocol.spup_rec_code.trim() !== '' 
+                ? protocol.spup_rec_code 
+                : docRef.id,
             created_at: created.toISOString()
           };
           
@@ -402,8 +538,35 @@ export default function CSVUploadPage() {
   };
 
   const renderProtocolJsonPreview = (protocol: Protocol) => {
+    // Determine if this is using the new format
+    const isNewFormat = protocol.spup_rec_code || protocol.research_title;
+    
     // Create a nicely formatted JSON preview
-    const previewData = {
+    const previewData = isNewFormat ? {
+      id: protocol.spup_rec_code || protocol.id,
+      spup_rec_code: protocol.spup_rec_code || 'N/A',
+      research_title: protocol.research_title || protocol.protocol_name,
+      principal_investigator: protocol.principal_investigator || 'N/A',
+      adviser: protocol.adviser || 'N/A',
+      course_program: protocol.course_program || 'N/A',
+      release_period: protocol.release_period,
+      academic_level: protocol.academic_level,
+      due_date: protocol.due_date,
+      status: protocol.status,
+      link: protocol.e_link || protocol.protocol_file || 'N/A',
+      reviewers: protocol.reviewers ? protocol.reviewers.map(r => ({
+        id: r.id,
+        name: formatReviewerName(r.id),
+        form_type: r.form_type || 'Unknown',
+        status: r.status
+      })) : [{
+        id: protocol.reviewer,
+        name: formatReviewerName(protocol.reviewer),
+        form_type: 'Unknown',
+        status: protocol.status
+      }]
+    } : {
+      id: protocol.id,
       protocol_name: protocol.protocol_name,
       release_period: protocol.release_period,
       academic_level: protocol.academic_level,
@@ -413,8 +576,10 @@ export default function CSVUploadPage() {
       protocol_file: protocol.protocol_file,
       reviewer: formatReviewerName(protocol.reviewer),
       reviewers: protocol.reviewers ? protocol.reviewers.map(r => ({
-        ...r,
-        name: formatReviewerName(r.id)
+        id: r.id,
+        name: formatReviewerName(r.id),
+        form_type: r.form_type || 'Unknown', 
+        status: r.status
       })) : undefined
     };
     
@@ -431,7 +596,16 @@ export default function CSVUploadPage() {
         <h1 className="text-2xl font-bold mb-2">Upload Protocol CSV</h1>
         <p className="text-gray-600">
           Upload a CSV file containing protocol information. The file will be converted to JSON format for storage in Firestore.
+          When using the new format, the SPUP REC Code will be used as the document ID in Firestore.
         </p>
+        <div className="mt-4">
+          <Link 
+            href="/admin/csv-upload/test-page" 
+            className="bg-blue-100 text-blue-700 py-2 px-4 rounded-md shadow-sm hover:bg-blue-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+          >
+            Try New Protocol Upload Format
+          </Link>
+        </div>
       </div>
       
       <div className="bg-white p-6 rounded-lg shadow-md mb-8">
@@ -455,7 +629,18 @@ export default function CSVUploadPage() {
             />
           </div>
           <p className="mt-2 text-sm text-gray-500">
-            Please upload a CSV file containing protocol information. The filename should include release period information.
+            The system supports two CSV formats:
+          </p>
+          <ul className="mt-2 text-sm text-gray-500 list-disc list-inside">
+            <li>
+              <strong>Classic Format:</strong> CSV with columns for Main Folder/Folder, Reviewer, Document, Link/Folder Link
+            </li>
+            <li>
+              <strong>New Protocol Format:</strong> CSV with columns for SPUP REC Code, Principal Investigator, Research Title, Adviser, Course/Program, E Link, and reviewer assignments (PRA1, PRA2, ICA, IACUC, IACUC2, CREF1, CREF2)
+            </li>
+          </ul>
+          <p className="mt-2 text-sm text-gray-500">
+            The filename should include release period information for automatic due date calculation.
           </p>
         </div>
         

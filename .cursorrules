@@ -112,24 +112,26 @@ The Admin Dashboard serves as the primary interface for administrators. Key comp
 The Firestore database can store protocol data as follows:
 
 ```json
-{
-  "protocols": {
-    "SPUP_2025_12345_SR_JD": {
-      "release_period": "First",
-      "academic_level": "Graduate",
-      "reviewer": "DRAPL-001",
-      "due_date": "2025-05-12",
-      "status": "In Progress",
-      "protocol_file": "https://sharepoint.link"
-    }
-  },
-  "reviewers": {
-    "DRAPL-001": {
-      "name": "Dr. Allan Paulo L. Blaquera",
-      "assigned_protocols": ["SPUP_2025_12345_SR_JD"]
-    }
-  }
-}
+protocols/                // Root collection for all protocols
+└── {MonthYear}/               // Document for each month (e.g., May2025)
+    └── {week-n}/              // Collection for each week (e.g., week-1)
+        └── {SPUP_REC_Code}/   // Document for each protocol, identified by SPUP REC Code
+            ├── principal_investigator: "Dr. John Doe"
+            ├── research_title: "Study on AI"
+            ├── adviser: "Prof. Jane Smith"
+            ├── course_program: "Computer Science"
+            ├── e_link: "http://example.com"
+            ├── created_at: "2023-10-12T07:20:50.52Z"
+            └── reviewers: [   // Array of reviewers
+                {
+                    id: "reviewer1",
+                    name: "Reviewer One",
+                    form_type: "PRA1",
+                    status: "In Progress",
+                    due_date: "2025-05-29"
+                },
+                // ... more reviewers
+            ]
 ```
 
 ### **CSV to JSON Conversion Example**
