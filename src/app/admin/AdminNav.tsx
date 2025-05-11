@@ -9,6 +9,9 @@ export default function AdminNav() {
   const navLinks = [
     { name: 'Dashboard', href: '/admin/dashboard' },
     { name: 'Protocols', href: '/admin/protocols' },
+    { name: 'Due Dates', href: '/admin/due-dates' },
+    { name: 'CSV Upload', href: '/admin/csv-upload' },
+    { name: 'Reviewers', href: '/admin/reviewers' },
     { name: 'Notices', href: '/admin/notices' },
   ];
 
@@ -18,10 +21,8 @@ export default function AdminNav() {
         <div className="flex justify-between h-16">
           <div className="flex">
             <div className="flex-shrink-0 flex items-center">
-              <Link href="/admin">
-              <span className="text-xl font-bold text-gray-800">e-REC Admin</span>
-              </Link>
-            </div>
+                <span className="text-xl font-bold text-gray-800">e-REC Admin</span>
+           </div>
             <div className="hidden sm:ml-6 sm:flex sm:space-x-8">
               {navLinks.map((link) => (
                 <Link
@@ -37,6 +38,11 @@ export default function AdminNav() {
                 </Link>
               ))}
             </div>
+          </div>
+          <div className="hidden sm:ml-6 sm:flex sm:items-center">
+            <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-indigo-100 text-indigo-800">
+              Admin
+            </span>
           </div>
         </div>
       </div>
