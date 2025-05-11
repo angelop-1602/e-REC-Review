@@ -324,301 +324,167 @@ export default function ProtocolDetailPage() {
     window.open(formUrl, '_blank');
   };
   
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-gray-100">
-        <header className="bg-slate-800 text-white p-4">
-          <div className="container mx-auto">
-            <h1 className="text-xl font-bold">e-REC Reviewer Portal</h1>
-          </div>
-        </header>
-        <main className="container mx-auto p-4">
-          <div className="bg-white p-6 rounded-lg shadow-md flex justify-center">
-            <p>Loading protocol details...</p>
-          </div>
-        </main>
+  return (
+    <div className="p-2 sm:p-4 md:p-6 space-y-4 sm:space-y-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-6">
+        <h1 className="text-xl sm:text-2xl font-semibold text-gray-800">
+          Protocol Details
+        </h1>
+        <Link
+          href="/reviewer/dashboard"
+          className="mt-2 sm:mt-0 text-sm text-blue-600 hover:text-blue-800 flex items-center"
+        >
+          ← Return to Dashboard
+        </Link>
       </div>
-    );
-  }
-  
-  if (error || !protocol) {
-    return (
-      <div className="min-h-screen bg-gray-100">
-        <header className="bg-slate-800 text-white p-4">
-          <div className="container mx-auto">
-            <h1 className="text-xl font-bold">e-REC Reviewer Portal</h1>
+
+      {loading ? (
+        <div className="text-center py-10">
+          <div className="inline-block animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-brand-green-500"></div>
+          <p className="mt-2 text-gray-500">Loading protocol details...</p>
+        </div>
+      ) : error ? (
+        <div className="bg-red-50 border-l-4 border-red-400 p-4">
+          <div className="flex">
+            <div className="flex-shrink-0">
+              <svg className="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+              </svg>
+            </div>
+            <div className="ml-3">
+              <p className="text-sm text-red-700">{error}</p>
+            </div>
           </div>
-        </header>
-        <main className="container mx-auto p-4">
-          <div className="bg-white p-6 rounded-lg shadow-md">
-            <p className="text-red-600 mb-4">{error || 'Protocol not found'}</p>
-            <Link href="/reviewer/dashboard" className="bg-blue-500 text-white py-2 px-4 rounded">
-              Back to Dashboard
+        </div>
+      ) : protocol ? (
+        <>
+          {successMessage && (
+            <div className="bg-green-50 border-l-4 border-green-400 p-4 mb-4">
+              <div className="flex">
+                <div className="flex-shrink-0">
+                  <svg className="h-5 w-5 text-green-400" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                  </svg>
+                </div>
+                <div className="ml-3">
+                  <p className="text-sm text-green-700">{successMessage}</p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="bg-white shadow overflow-hidden sm:rounded-lg">
+            <div className="px-4 py-5 sm:px-6 border-b border-gray-200">
+              <h3 className="text-lg leading-6 font-medium text-gray-900 break-words">
+                {protocol.protocol_name}
+              </h3>
+              <p className="mt-1 max-w-2xl text-sm text-gray-500">
+                {protocol.academic_level} • {protocol.release_period} Release
+              </p>
+            </div>
+            
+            <div className="border-t border-gray-200">
+              <dl>
+                <div className="bg-gray-50 px-4 py-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+                  <dt className="text-sm font-medium text-gray-500">Status</dt>
+                  <dd className="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">
+                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                      getCurrentReviewerStatus() === 'Completed'
+                        ? 'bg-green-100 text-green-800'
+                        : isOverdue(protocol.due_date)
+                        ? 'bg-red-100 text-red-800'
+                        : isDueSoon(protocol.due_date)
+                        ? 'bg-yellow-100 text-yellow-800'
+                        : 'bg-blue-100 text-blue-800'
+                    }`}>
+                      {getCurrentReviewerStatus() === 'Completed'
+                        ? 'Completed'
+                        : isOverdue(protocol.due_date)
+                        ? 'Overdue'
+                        : isDueSoon(protocol.due_date)
+                        ? 'Due Soon'
+                        : 'In Progress'}
+                    </span>
+                  </dd>
+                </div>
+                
+                <div className="bg-white px-4 py-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+                  <dt className="text-sm font-medium text-gray-500">Due Date</dt>
+                  <dd className="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">
+                    {formatDate(protocol.due_date)}
+                  </dd>
+                </div>
+                
+                <div className="bg-gray-50 px-4 py-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+                  <dt className="text-sm font-medium text-gray-500">Review Form</dt>
+                  <dd className="mt-1 text-sm sm:mt-0 sm:col-span-2">
+                    <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                      <span className="text-gray-900">{formInfo.formName}</span>
+                      <button
+                        onClick={() => openForm(formInfo.formUrl)}
+                        className="inline-flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
+                        disabled={!formInfo.formUrl}
+                      >
+                        Open Review Form
+                      </button>
+                    </div>
+                  </dd>
+                </div>
+                
+                <div className="bg-white px-4 py-4 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+                  <dt className="text-sm font-medium text-gray-500">Protocol File</dt>
+                  <dd className="mt-1 text-sm sm:mt-0 sm:col-span-2">
+                    <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                      <span className="text-gray-900 break-all overflow-hidden text-ellipsis">{protocol.protocol_file}</span>
+                      <a
+                        href={protocol.protocol_file}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center px-3 py-1.5 border border-gray-300 text-xs font-medium rounded text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                      >
+                        View Protocol
+                      </a>
+                    </div>
+                  </dd>
+                </div>
+              </dl>
+            </div>
+          </div>
+          
+          <div className="mt-6 flex flex-col sm:flex-row gap-3 justify-end">
+            {getCurrentReviewerStatus() === 'Completed' ? (
+              <button
+                onClick={markAsInProgress}
+                className="inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-yellow-600 hover:bg-yellow-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-yellow-500"
+                disabled={statusChanging}
+              >
+                {statusChanging ? 'Processing...' : 'Mark as In Progress'}
+              </button>
+            ) : (
+              <button
+                onClick={markAsCompleted}
+                className="inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
+                disabled={statusChanging}
+              >
+                {statusChanging ? 'Processing...' : 'Mark as Completed'}
+              </button>
+            )}
+            
+            <Link
+              href="/reviewer/dashboard"
+              className="inline-flex justify-center py-2 px-4 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+            >
+              Return to Dashboard
             </Link>
           </div>
-        </main>
-      </div>
-    );
-  }
-  
-  const currentReviewerStatus = getCurrentReviewerStatus();
-  
-  return (
-    <div className="min-h-screen bg-gray-100">  
-      <main className="container mx-auto p-4">
-        <div className="mb-4">
-          <Link href="/reviewer/dashboard" className="text-blue-500 hover:underline flex items-center">
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-            </svg>
-            Back to Dashboard
-          </Link>
+        </>
+      ) : (
+        <div className="text-center py-10">
+          <p className="text-gray-500">No protocol data found.</p>
         </div>
-        
-        {successMessage && (
-          <div className="mb-4 p-3 bg-green-100 text-green-800 rounded">
-            {successMessage}
-          </div>
-        )}
-        
-        {error && (
-          <div className="mb-4 p-3 bg-red-100 text-red-800 rounded">
-            {error}
-          </div>
-        )}
-        
-        <div className="bg-white p-6 rounded-lg shadow-md mb-6">
-          <div className="flex justify-between items-start mb-6">
-            <h1 className="text-2xl font-bold">{protocol.protocol_name}</h1>
-            <div>
-              <div className="flex items-center">
-                {currentReviewerStatus === 'Completed' ? (
-                  <div className="flex items-center">
-                    <div className="w-6 h-6 mr-2 rounded-full border-2 border-green-500 flex items-center justify-center">
-                      <svg className="w-4 h-4 text-green-500" fill="currentColor" viewBox="0 0 20 20">
-                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
-                      </svg>
-                    </div>
-                    <span className="bg-green-100 text-green-800 px-3 py-1 rounded-full text-sm font-medium">
-                      Completed
-                    </span>
-                  </div>
-                ) : protocol.due_date && isOverdue(protocol.due_date) ? (
-                  <div className="flex items-center">
-                    <div className="w-6 h-6 mr-2 rounded-full border-2 border-red-500 flex items-center justify-center">
-                      <svg className="w-4 h-4 text-red-500" fill="currentColor" viewBox="0 0 20 20">
-                        <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clipRule="evenodd" />
-                      </svg>
-                    </div>
-                    <span className="bg-red-100 text-red-800 px-3 py-1 rounded-full text-sm font-medium">
-                      Overdue
-                    </span>
-                  </div>
-                ) : (
-                  <div className="flex items-center">
-                    <div className="w-6 h-6 mr-2 rounded-full border-2 border-yellow-500 flex items-center justify-center">
-                      <div className="w-3 h-3 rounded-full bg-yellow-500"></div>
-                    </div>
-                    <span className="bg-yellow-100 text-yellow-800 px-3 py-1 rounded-full text-sm font-medium">
-                      In Progress
-                    </span>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-          
-          {/* Progress Tracker */}
-          <div className="mb-8">
-            <div className="relative">
-              <div className="overflow-hidden h-2 mb-4 text-xs flex rounded bg-gray-200">
-                <div 
-                  style={{ width: currentReviewerStatus === 'Completed' ? '100%' : '50%' }} 
-                  className={`shadow-none flex flex-col text-center whitespace-nowrap text-white justify-center ${currentReviewerStatus === 'Completed' ? 'bg-green-500' : 'bg-yellow-500'}`}
-                ></div>
-              </div>
-              <div className="flex justify-between">
-                <div className="text-xs text-gray-500">Assigned</div>
-                <div className="text-xs text-gray-500">In Progress</div>
-                <div className="text-xs text-gray-500">Completed</div>
-              </div>
-            </div>
-          </div>
-          
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-            <div>
-              <h2 className="text-lg font-semibold mb-4">Protocol Information</h2>
-              <div className="space-y-3">
-                <div>
-                  <p className="text-sm text-gray-500">Form Type</p>
-                  <p className="font-medium">
-                    {formInfo.formName}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-500">Release Period</p>
-                  <p className="font-medium">{protocol.release_period}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-500">Academic Level</p>
-                  <p className="font-medium">{protocol.academic_level}</p>
-                </div>
-              </div>
-            </div>
-            
-            <div>
-              <h2 className="text-lg font-semibold mb-4">Review Information</h2>
-              <div className="space-y-3">
-                <div>
-                  <p className="text-sm text-gray-500">Reviewer</p>
-                  <p className="font-medium">{reviewer.name}</p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-500">Due Date</p>
-                  <p className={`font-medium ${protocol.due_date && isOverdue(protocol.due_date) && currentReviewerStatus !== 'Completed' ? 'text-red-600' : ''}`}>
-                    {protocol.due_date ? formatDate(protocol.due_date) : 'Not set'}
-                    {protocol.due_date && isOverdue(protocol.due_date) && currentReviewerStatus !== 'Completed' && (
-                      <span className="ml-2 text-xs bg-red-100 text-red-800 px-2 py-0.5 rounded-full">
-                        Overdue
-                      </span>
-                    )}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-sm text-gray-500">Assigned Date</p>
-                  <p className="font-medium">{new Date(protocol.created_at).toLocaleDateString()}</p>
-                </div>
-              </div>
-            </div>
-          </div>
-          
-          {/* Action Buttons Section */}
-          <div className="mb-8 bg-gray-50 p-6 rounded-lg border border-gray-200">
-            <h2 className="text-xl font-semibold mb-4">Review Actions</h2>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div>
-                <h3 className="text-md font-medium mb-3">Step 1: Access Protocol Document</h3>
-                <a 
-                  href={protocol.protocol_file} 
-                  target="_blank" 
-                  rel="noopener noreferrer" 
-                  className="bg-blue-600 text-white py-3 px-4 rounded-md inline-flex items-center hover:bg-blue-700 w-full justify-center"
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                  </svg>
-                  Open Protocol in SharePoint
-                </a>
-              </div>
-              
-              <div>
-                <h3 className="text-md font-medium mb-3">Step 2: Submit Review Form</h3>
-                {formInfo.formUrl ? (
-                  <button 
-                    className="bg-indigo-600 text-white py-3 px-4 rounded-md inline-flex items-center hover:bg-indigo-700 w-full justify-center"
-                    onClick={() => openForm(formInfo.formUrl)}
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                    </svg>
-                    Open {formInfo.formType || 'Review'} Form
-                  </button>
-                ) : (
-                  <div className="bg-gray-100 p-3 rounded-md text-sm text-gray-600">
-                    Please select the appropriate form below
-                  </div>
-                )}
-              </div>
-            </div>
-            
-            <div className="mt-6">
-              <h3 className="text-md font-medium mb-3">Step 3: Mark Review Status</h3>
-              {currentReviewerStatus === 'In Progress' ? (
-                <button
-                  onClick={markAsCompleted}
-                  disabled={statusChanging}
-                  className="bg-green-600 text-white py-3 px-4 rounded-md inline-flex items-center hover:bg-green-700 w-full justify-center disabled:opacity-50"
-                >
-                  {statusChanging ? (
-                    <span className="flex items-center">
-                      <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                      </svg>
-                      Updating...
-                    </span>
-                  ) : (
-                    <span className="flex items-center">
-                      <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path>
-                      </svg>
-                      Mark Review as Completed
-                    </span>
-                  )}
-                </button>
-              ) : (
-                <button
-                  onClick={markAsInProgress}
-                  disabled={statusChanging}
-                  className="bg-yellow-500 text-white py-3 px-4 rounded-md inline-flex items-center hover:bg-yellow-600 w-full justify-center disabled:opacity-50"
-                >
-                  {statusChanging ? (
-                    <span className="flex items-center">
-                      <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                      </svg>
-                      Updating...
-                    </span>
-                  ) : (
-                    <span className="flex items-center">
-                      <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-                      </svg>
-                      Return to In Progress
-                    </span>
-                  )}
-                </button>
-              )}
-            </div>
-          </div>
-          
-          {/* All Available Forms */}
-          <div className="border-t pt-6">
-            <h2 className="text-lg font-semibold mb-4">All Available Review Forms</h2>
-            <p className="mb-4 text-sm text-gray-600">
-              If the auto-detected form is incorrect, you can select from any of the forms below:
-            </p>
-            
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              <button 
-                className={`py-2 px-4 rounded ${formInfo.formType === 'ICA' ? 'bg-indigo-700 text-white' : 'bg-indigo-600 text-white hover:bg-indigo-700'}`}
-                onClick={() => openForm(getFormUrl('ICA'))}
-              >
-                ICA Form
-              </button>
-              <button 
-                className={`py-2 px-4 rounded ${formInfo.formType === 'PRA' ? 'bg-indigo-700 text-white' : 'bg-indigo-600 text-white hover:bg-indigo-700'}`}
-                onClick={() => openForm(getFormUrl('PRA'))}
-              >
-                PRA Form
-              </button>
-              <button 
-                className={`py-2 px-4 rounded ${formInfo.formType === 'CFEFR' ? 'bg-indigo-700 text-white' : 'bg-indigo-600 text-white hover:bg-indigo-700'}`}
-                onClick={() => openForm(getFormUrl('CFEFR'))}
-              >
-                CFEFR Form
-              </button>
-              <button 
-                className={`py-2 px-4 rounded ${formInfo.formType === 'PRA-EX' || formInfo.formType === 'PRA_EX' ? 'bg-indigo-700 text-white' : 'bg-indigo-600 text-white hover:bg-indigo-700'}`}
-                onClick={() => openForm(getFormUrl('PRA-EX'))}
-              >
-                PRA-EX Form
-              </button>
-            </div>
-          </div>
-        </div>
-      </main>
+      )}
+      
+      <Script src="https://forms.office.com/Pages/TopLevelScriptResources.aspx" strategy="lazyOnload" />
     </div>
   );
 } 

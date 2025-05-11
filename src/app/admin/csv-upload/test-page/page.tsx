@@ -234,7 +234,7 @@ export default function TestPage() {
       for (const protocol of processedData) {
         // In Firestore, we need to create the nested path correctly
         // First: get a reference to the month document
-        const monthDocRef = doc(collection(db, 'test-protocols'), selectedMonth);
+        const monthDocRef = doc(collection(db, 'protocols'), selectedMonth);
         
         // Second: create a collection with the week name directly under the month document
         const weekCollectionRef = collection(monthDocRef, selectedWeek);
@@ -250,7 +250,7 @@ export default function TestPage() {
       }
       
       setUploadStatus(`Successfully uploaded ${totalProtocols} protocols.`);
-      showNotification('success', 'Upload Complete', `Successfully uploaded ${totalProtocols} protocols to test-protocols/${selectedMonth}/${selectedWeek}/`);
+      showNotification('success', 'Upload Complete', `Successfully uploaded ${totalProtocols} protocols to protocols/${selectedMonth}/${selectedWeek}/`);
       
       // Reset form
       if (fileInputRef.current) {
@@ -273,7 +273,7 @@ export default function TestPage() {
       <div className="border rounded-md p-4 mb-4 bg-white shadow-sm">
         <h3 className="font-medium mb-2 text-blue-700">{protocol.research_title}</h3>
         <p className="text-xs text-gray-500 mb-2">
-          Will be stored at: test-protocols/{selectedMonth}/{selectedWeek}/{protocol.spup_rec_code}
+          Will be stored at: protocols/{selectedMonth}/{selectedWeek}/{protocol.spup_rec_code}
         </p>
         <pre className="bg-gray-100 p-2 rounded text-xs overflow-x-auto">
           {JSON.stringify({
@@ -303,7 +303,7 @@ export default function TestPage() {
         <h1 className="text-2xl font-bold mb-2">Test CSV Upload with New Format</h1>
         <p className="text-gray-600 mb-4">
           This page allows you to test the new CSV upload format, which uses SPUP REC Code as the document ID and 
-          saves data in the new nested structure: test-protocols/month/week/SPUP_REC_Code.
+          saves data in the new nested structure: protocols/month/week/SPUP_REC_Code.
         </p>
         <Link 
           href="/admin/csv-upload" 

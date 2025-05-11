@@ -62,6 +62,12 @@ export default function DueDateMonitorPage() {
     message: ''
   });
 
+  // Add state for bulk selection
+  const [selectedProtocols, setSelectedProtocols] = useState<string[]>([]);
+  const [bulkReassignModalOpen, setBulkReassignModalOpen] = useState(false);
+  const [bulkReassignmentLoading, setBulkReassignmentLoading] = useState(false);
+  const [bulkNewReviewer, setBulkNewReviewer] = useState('');
+  
   const showNotification = (type: 'success' | 'error' | 'info' | 'warning', title: string, message: string) => {
     setNotification({
       isOpen: true,
@@ -342,6 +348,123 @@ export default function DueDateMonitorPage() {
     }
   };
 
+  // Add a function to handle bulk reassignment
+  const handleBulkReassign = async (newReviewerId: string) => {
+    if (selectedProtocols.length === 0 || !newReviewerId) {
+      showNotification('error', 'Error', 'No protocols selected or missing new reviewer');
+      return;
+    }
+
+    try {
+      setBulkReassignmentLoading(true);
+      
+      // Process each selected protocol
+      for (const protocolId of selectedProtocols) {
+        // Get the protocol document
+        const protocolRef = doc(db, 'protocols', protocolId);
+        const protocolSnap = await getDoc(protocolRef);
+        
+        if (!protocolSnap.exists()) {
+          console.error(`Protocol ${protocolId} not found`);
+          continue;
+        }
+        
+        const protocolData = protocolSnap.data() as Protocol;
+        
+        // Find the new reviewer details
+        const newReviewer = reviewerList.find(r => r.id === newReviewerId);
+        
+        if (!newReviewer) {
+          console.error('New reviewer not found');
+          continue;
+        }
+        
+        // Update the reviewers array with the new assignment
+        let updatedReviewers: Reviewer[] = [];
+        
+        if (protocolData.reviewers && protocolData.reviewers.length > 0) {
+          // Replace all reviewers that are not completed
+          updatedReviewers = protocolData.reviewers.map(reviewer => {
+            if (reviewer.status !== 'Completed') {
+              return {
+                id: newReviewerId,
+                name: newReviewer.name,
+                status: 'In Progress',
+                document_type: reviewer.document_type
+              };
+            }
+            return reviewer;
+          });
+        } else if (protocolData.reviewer) {
+          // Handle single reviewer case
+          updatedReviewers = [{
+            id: newReviewerId,
+            name: newReviewer.name,
+            status: 'In Progress',
+            document_type: protocolData.document_type
+          }];
+        }
+        
+        // Update the protocol document
+        await updateDoc(protocolRef, {
+          reviewers: updatedReviewers,
+          // Remove the single reviewer field if it exists
+          reviewer: null,
+          // Update the last_updated timestamp
+          last_updated: new Date().toISOString()
+        });
+      }
+      
+      // Refresh the protocols list
+      window.location.reload();
+      
+      // Show success message
+      showNotification(
+        'success',
+        'Protocols Reassigned',
+        `Successfully reassigned ${selectedProtocols.length} protocols to ${reviewerList.find(r => r.id === newReviewerId)?.name}`
+      );
+      
+      // Reset selection
+      setSelectedProtocols([]);
+      setBulkReassignModalOpen(false);
+    } catch (error) {
+      console.error('Error in bulk reassignment:', error);
+      showNotification(
+        'error',
+        'Reassignment Failed',
+        'There was an error reassigning the protocols. Please try again.'
+      );
+    } finally {
+      setBulkReassignmentLoading(false);
+    }
+  };
+  
+  // Add a function to toggle protocol selection
+  const toggleProtocolSelection = (protocolId: string) => {
+    setSelectedProtocols(prev => {
+      if (prev.includes(protocolId)) {
+        return prev.filter(id => id !== protocolId);
+      } else {
+        return [...prev, protocolId];
+      }
+    });
+  };
+  
+  // Add function to select all filteredProtocols that are overdue
+  const selectAllOverdue = () => {
+    const overdueIds = filteredProtocols
+      .filter(p => isOverdue(p.due_date) && p.status !== 'Completed')
+      .map(p => p.id);
+    
+    setSelectedProtocols(overdueIds);
+  };
+  
+  // Add function to clear selection
+  const clearSelection = () => {
+    setSelectedProtocols([]);
+  };
+
   if (loading) {
     return (
       <div className="p-8">
@@ -455,6 +578,28 @@ export default function DueDateMonitorPage() {
         </div>
       </div>
 
+      {/* Add bulk action controls */}
+      {selectedProtocols.length > 0 && (
+        <div className="flex flex-wrap justify-between items-center mb-4 p-3 bg-blue-50 rounded-md border border-blue-200">
+          <div className="flex items-center">
+            <span className="font-medium">{selectedProtocols.length} protocol(s) selected</span>
+            <button 
+              onClick={clearSelection}
+              className="ml-2 text-sm text-blue-600 hover:text-blue-800"
+            >
+              Clear selection
+            </button>
+          </div>
+          <button
+            onClick={() => setBulkReassignModalOpen(true)}
+            className="bg-blue-600 text-white px-4 py-2 rounded-md text-sm hover:bg-blue-700"
+            disabled={selectedProtocols.length === 0}
+          >
+            Bulk Reassign
+          </button>
+        </div>
+      )}
+
       {/* Protocols List */}
       <div className="bg-white rounded-lg shadow overflow-hidden">
         <div className="px-4 py-5 sm:px-6 border-b border-gray-200">
@@ -470,6 +615,17 @@ export default function DueDateMonitorPage() {
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
                 <tr>
+                  {/* Add a checkbox column for bulk actions */}
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-10">
+                    {selectedFilter === 'overdue' && (
+                      <button
+                        onClick={selectAllOverdue}
+                        className="text-xs text-blue-600 hover:text-blue-800"
+                      >
+                        Select All
+                      </button>
+                    )}
+                  </th>
                   <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Protocol Name
                   </th>
@@ -491,6 +647,17 @@ export default function DueDateMonitorPage() {
                 {filteredProtocols.map((protocol) => (
                   <React.Fragment key={protocol.id}>
                     <tr className="hover:bg-gray-50">
+                      {/* Add checkbox for selection */}
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        {protocol.status !== 'Completed' && (
+                          <input
+                            type="checkbox"
+                            checked={selectedProtocols.includes(protocol.id)}
+                            onChange={() => toggleProtocolSelection(protocol.id)}
+                            className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                          />
+                        )}
+                      </td>
                       <td className="px-6 py-4">
                         <div className="text-sm font-medium text-gray-900">{protocol.protocol_name}</div>
                       </td>
@@ -578,17 +745,82 @@ export default function DueDateMonitorPage() {
         )}
       </div>
 
-      {/* Reassignment Modal */}
-      {reassignmentData && (
-        <ReassignmentModal
-          isOpen={reassignModalOpen}
-          protocolName={reassignmentData.protocolName}
-          currentReviewerName={reassignmentData.reviewerName}
-          reviewerList={reviewerList}
-          loading={reassignmentData.loading}
-          onCancel={() => setReassignModalOpen(false)}
-          onReassign={handleReassign}
-        />
+      {/* Single Reviewer Reassignment Modal */}
+      <ReassignmentModal
+        isOpen={reassignModalOpen}
+        protocolName={reassignmentData?.protocolName || ''}
+        currentReviewerName={reassignmentData?.reviewerName || ''}
+        reviewerList={reviewerList}
+        loading={reassignmentData?.loading || false}
+        onCancel={() => setReassignModalOpen(false)}
+        onReassign={handleReassign}
+      />
+
+      {/* Bulk Reassignment Modal */}
+      {bulkReassignModalOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 w-full max-w-md">
+            <h3 className="text-lg font-bold mb-4">Bulk Reassign Protocols</h3>
+            
+            <div className="mb-4">
+              <p className="text-sm text-gray-600 mb-2">
+                You are reassigning {selectedProtocols.length} protocols to a new reviewer.
+              </p>
+              <p className="text-sm text-gray-600 mb-4">
+                Only reviewers that are not completed will be reassigned.
+              </p>
+            </div>
+            
+            <div className="mb-6">
+              <label htmlFor="bulk-new-reviewer" className="block text-sm font-medium text-gray-700 mb-1">
+                Select New Reviewer
+              </label>
+              <select
+                id="bulk-new-reviewer"
+                value={bulkNewReviewer}
+                onChange={(e) => setBulkNewReviewer(e.target.value)}
+                className="w-full border border-gray-300 rounded-md py-2 px-3 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                disabled={bulkReassignmentLoading}
+              >
+                <option value="">Select a reviewer</option>
+                {reviewerList.map(reviewer => (
+                  <option key={reviewer.id} value={reviewer.id}>
+                    {reviewer.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            
+            <div className="flex justify-end space-x-3">
+              <button
+                type="button"
+                onClick={() => setBulkReassignModalOpen(false)}
+                className="py-2 px-4 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                disabled={bulkReassignmentLoading}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => handleBulkReassign(bulkNewReviewer)}
+                className="py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                disabled={bulkReassignmentLoading || !bulkNewReviewer}
+              >
+                {bulkReassignmentLoading ? (
+                  <span className="flex items-center">
+                    <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    Processing...
+                  </span>
+                ) : (
+                  'Reassign All Selected'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Notification Modal */}

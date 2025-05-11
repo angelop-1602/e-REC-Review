@@ -100,6 +100,7 @@ export default function CSVUploadPage() {
   const [showPreview, setShowPreview] = useState(false);
   const [previewData, setPreviewData] = useState<Protocol[]>([]);
   const [batchSize, setBatchSize] = useState(50);
+  const [activeTab, setActiveTab] = useState<'protocols' | 'json'>('protocols');
   
   // Notification state
   const [notification, setNotification] = useState<{
@@ -117,6 +118,12 @@ export default function CSVUploadPage() {
   // Progress tracking
   const [uploadProgress, setUploadProgress] = useState(0);
   const [isUploading, setIsUploading] = useState(false);
+
+  // Add a state for the JSON structure preview
+  const [jsonPreview, setJsonPreview] = useState<{
+    protocols: any;
+    structure: string;
+  } | null>(null);
 
   // Fetch existing reviewers on component mount
   useEffect(() => {
@@ -453,6 +460,50 @@ export default function CSVUploadPage() {
   };
 
   const generatePreview = () => {
+    // Create a copy of the protocols for preview
+    const previewData = [...protocols].slice(0, Math.min(protocols.length, 5));
+    setPreviewData(previewData);
+    
+    // Generate a JSON structure preview
+    if (protocols.length > 0) {
+      // Create a sample structure based on the first protocol
+      const sampleProtocol = protocols[0];
+      const protocolId = sampleProtocol.id;
+      
+      // Create a simplified JSON structure
+      const jsonStructure = {
+        protocols: {
+          [protocolId]: {
+            protocol_name: sampleProtocol.protocol_name,
+            release_period: sampleProtocol.release_period,
+            academic_level: sampleProtocol.academic_level,
+            reviewer: sampleProtocol.reviewer || null,
+            reviewers: sampleProtocol.reviewers || [],
+            due_date: sampleProtocol.due_date,
+            status: sampleProtocol.status,
+            protocol_file: sampleProtocol.protocol_file,
+            document_type: sampleProtocol.document_type || null,
+            created_at: sampleProtocol.created_at,
+            // Include additional fields if available
+            spup_rec_code: sampleProtocol.spup_rec_code || null,
+            principal_investigator: sampleProtocol.principal_investigator || null,
+            research_title: sampleProtocol.research_title || null,
+            adviser: sampleProtocol.adviser || null,
+            course_program: sampleProtocol.course_program || null,
+            e_link: sampleProtocol.e_link || null,
+          }
+        }
+      };
+      
+      // Set the JSON preview
+      setJsonPreview({
+        protocols: jsonStructure,
+        structure: JSON.stringify(jsonStructure, null, 2)
+      });
+    } else {
+      setJsonPreview(null);
+    }
+    
     setShowPreview(true);
   };
 
@@ -777,21 +828,108 @@ export default function CSVUploadPage() {
         </div>
       )}
 
-      {showPreview && previewData.length > 0 && (
-        <div className="bg-white p-6 rounded-lg shadow-md mb-8">
-          <h2 className="text-xl font-semibold mb-4">Data Preview</h2>
-          <p className="text-sm text-gray-500 mb-4">
-            Showing preview of the first {previewData.length} protocols out of {protocols.length} total.
-            The data will be formatted as shown below when uploaded to Firestore.
-          </p>
+      {showPreview && (
+        <div className="mt-8">
+          <h2 className="text-xl font-bold mb-4">Preview</h2>
           
-          <div className="divide-y divide-gray-200">
-            {previewData.map((protocol, index) => (
-              <div key={index} className="py-4">
-                <h3 className="font-medium mb-2">{protocol.protocol_name}</h3>
-                {renderProtocolJsonPreview(protocol)}
+          <div className="border-b border-gray-200 mb-4">
+            <nav className="-mb-px flex space-x-8">
+              <button
+                onClick={() => setActiveTab('protocols')}
+                className={`pb-2 font-medium text-sm ${
+                  activeTab === 'protocols'
+                    ? 'border-b-2 border-blue-500 text-blue-600'
+                    : 'text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                }`}
+              >
+                Protocol Preview
+              </button>
+              <button
+                onClick={() => setActiveTab('json')}
+                className={`pb-2 font-medium text-sm ${
+                  activeTab === 'json'
+                    ? 'border-b-2 border-blue-500 text-blue-600'
+                    : 'text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                }`}
+              >
+                JSON Structure
+              </button>
+            </nav>
+          </div>
+          
+          {activeTab === 'protocols' && (
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-200">
+                {previewData.map((protocol, index) => (
+                  <tr key={index}>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                      {protocol.protocol_name}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {renderProtocolJsonPreview(protocol)}
+                    </td>
+                  </tr>
+                ))}
+              </table>
+              
+              {previewData.length < protocols.length && (
+                <p className="text-sm text-gray-500 mt-2">
+                  Showing {previewData.length} of {protocols.length} protocols...
+                </p>
+              )}
+            </div>
+          )}
+          
+          {activeTab === 'json' && jsonPreview && (
+            <div className="mt-4">
+              <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
+                <h3 className="text-lg font-medium mb-2">Firestore Database Structure</h3>
+                <p className="text-sm text-gray-600 mb-4">
+                  This is how your data will be structured in the Firestore database. Each protocol will be stored with the structure shown below.
+                </p>
+                
+                <div className="relative">
+                  <div className="absolute top-2 right-2">
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(jsonPreview.structure);
+                        showNotification('success', 'Copied', 'JSON structure copied to clipboard');
+                      }}
+                      className="text-sm text-blue-600 hover:text-blue-800"
+                    >
+                      Copy
+                    </button>
+                  </div>
+                  <pre className="bg-gray-900 text-gray-100 p-4 rounded-lg text-sm overflow-x-auto">
+                    {jsonPreview.structure}
+                  </pre>
+                </div>
+                
+                <p className="text-sm text-gray-600 mt-4">
+                  <strong>Note:</strong> The actual data structure may vary based on the content of your CSV file. 
+                  Null or undefined values will not be stored in the database.
+                </p>
               </div>
-            ))}
+            </div>
+          )}
+          
+          <div className="mt-6 flex flex-wrap items-center space-x-4">
+            <button
+              type="button"
+              onClick={generatePreview}
+              className="bg-gray-100 text-gray-700 py-2 px-4 border border-gray-300 rounded-md shadow-sm hover:bg-gray-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500"
+              disabled={loading || isUploading || protocols.length === 0}
+            >
+              Preview Data
+            </button>
+            <button
+              type="button"
+              onClick={uploadToFirestore}
+              className="bg-blue-600 text-white py-2 px-4 rounded-md shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+              disabled={loading || isUploading || protocols.length === 0}
+            >
+              {isUploading ? 'Uploading...' : 'Upload to Firestore'}
+            </button>
           </div>
         </div>
       )}

@@ -6,6 +6,19 @@ import { db } from '@/lib/firebaseconfig';
 import Link from 'next/link';
 import { isOverdue, isDueSoon, formatDate } from '@/lib/utils';
 import ProtocolStatusCard from '@/components/ProtocolStatusCard';
+import dynamic from 'next/dynamic';
+
+// Dynamically import Chart.js to avoid SSR issues
+const Chart = dynamic(
+  () => import('react-chartjs-2').then((mod) => mod.Bar),
+  { ssr: false }
+);
+
+// Dynamically import Chart.js registry
+const ChartRegistry = dynamic(
+  () => import('@/components/ChartRegistry'),
+  { ssr: false }
+);
 
 interface Reviewer {
   id: string;
@@ -50,6 +63,17 @@ export default function AdminDashboard() {
     completedCount: 0,
     inProgressCount: 0,
     dueSoonCount: 0
+  });
+  const [chartData, setChartData] = useState<{
+    labels: string[];
+    datasets: {
+      label: string;
+      data: number[];
+      backgroundColor: string;
+    }[];
+  }>({
+    labels: [],
+    datasets: []
   });
   
   useEffect(() => {
@@ -226,6 +250,58 @@ export default function AdminDashboard() {
           }))
           .sort((a, b) => b.assigned - a.assigned)
           .slice(0, 5); // Get top 5 for display
+        
+        // Prepare chart data for completion status by release period
+        const releaseStats = new Map<string, { completed: number, inProgress: number }>();
+        
+        groupedProtocols.forEach(protocol => {
+          if (!protocol.release_period) return;
+          
+          const stats = releaseStats.get(protocol.release_period) || { completed: 0, inProgress: 0 };
+          
+          if (protocol.status === 'Completed') {
+            stats.completed++;
+          } else {
+            stats.inProgress++;
+          }
+          
+          releaseStats.set(protocol.release_period, stats);
+        });
+        
+        // Convert to chart format - sort by release period
+        const sortedReleases = Array.from(releaseStats.keys()).sort((a, b) => {
+          // Sort first/second/third/fourth releases first
+          const orderMap: {[key: string]: number} = {
+            'First Release': 1, 'Second Release': 2, 'Third Release': 3, 'Fourth Release': 4
+          };
+          
+          const aOrder = orderMap[a] || 99;
+          const bOrder = orderMap[b] || 99;
+          
+          if (aOrder !== bOrder) return aOrder - bOrder;
+          
+          // Then sort by month for monthly releases
+          return a.localeCompare(b);
+        });
+        
+        const completedData = sortedReleases.map(release => releaseStats.get(release)?.completed || 0);
+        const inProgressData = sortedReleases.map(release => releaseStats.get(release)?.inProgress || 0);
+        
+        setChartData({
+          labels: sortedReleases,
+          datasets: [
+            {
+              label: 'Completed',
+              data: completedData,
+              backgroundColor: 'rgba(34, 197, 94, 0.7)'
+            },
+            {
+              label: 'In Progress',
+              data: inProgressData,
+              backgroundColor: 'rgba(59, 130, 246, 0.7)'
+            }
+          ]
+        });
         
         // Set all the state
         setOverdueProtocols(sortedOverdue.slice(0, 5));
@@ -524,6 +600,63 @@ export default function AdminDashboard() {
             )}
           </div>
         </div>
+      </div>
+      
+      {/* Add Completion Chart by Release Period */}
+      <div className="bg-white rounded-lg shadow p-6 mb-8">
+        <h2 className="text-xl font-bold mb-4">Protocol Completion by Release Period</h2>
+        
+        {loading ? (
+          <div className="flex justify-center items-center h-64">
+            <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
+          </div>
+        ) : error ? (
+          <div className="text-red-500 text-center">{error}</div>
+        ) : chartData.labels.length === 0 ? (
+          <div className="text-gray-500 text-center py-8">No data available for chart</div>
+        ) : (
+          <div className="h-80">
+            <ChartRegistry />
+            <Chart
+              data={chartData}
+              options={{
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                  x: {
+                    stacked: true,
+                    title: {
+                      display: true,
+                      text: 'Release Period'
+                    }
+                  },
+                  y: {
+                    stacked: true,
+                    title: {
+                      display: true,
+                      text: 'Number of Protocols'
+                    },
+                    ticks: {
+                      precision: 0
+                    }
+                  }
+                },
+                plugins: {
+                  legend: {
+                    position: 'top'
+                  },
+                  tooltip: {
+                    callbacks: {
+                      title: (tooltipItems) => {
+                        return tooltipItems[0].label;
+                      }
+                    }
+                  }
+                }
+              }}
+            />
+          </div>
+        )}
       </div>
     </div>
   );
