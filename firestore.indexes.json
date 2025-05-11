@@ -1,0 +1,19 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "protocols",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "reviewer",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "due_date",
+          "order": "ASCENDING"
+        }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

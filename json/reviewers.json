@@ -1,0 +1,83 @@
+{
+    "reviewers": {
+      "DRAPL-001": {
+        "name": "Dr. Allan Paulo L. Blaquera"
+      },
+      "DRNRD-002": {
+        "name": "Dr. Nova R. Domingo"
+      },
+      "DRCUG-003": {
+        "name": "Dr. Claudeth U. Gamiao"
+      },
+      "DRMKL-004": {
+        "name": "Dr. Mark Klimson L. Luyun"
+      },
+      "MRWDM-005": {
+        "name": "Mr. Wilfredo DJ P. Martin IV"
+      },
+      "MRSGI-006": {
+        "name": "Mr. Sergio G. Imperio"
+      },
+      "DRMLB-007": {
+        "name": "Dr. Marjorie L. Bambalan"
+      },
+      "MRSEI-008": {
+        "name": "Mrs. Elizabeth C. Iquin"
+      },
+      "DRMT-009": {
+        "name": "Dr. Milrose Tangonan"
+      },
+      "ENGVCB-010": {
+        "name": "Engr. Verge C. Baccay"
+      },
+      "MRET-011": {
+        "name": "Mr. Everett T. Laureta"
+      },
+      "MRMFBA-012": {
+        "name": "Mrs. Maria Felina B. Agbayani"
+      },
+      "MRRBD-013": {
+        "name": "Mrs. Rita B. Daliwag"
+      },
+      "MRLJ-014": {
+        "name": "Mrs. Lita Jose"
+      },
+      "DRCDC-015": {
+        "name": "Dr. Corazon Dela Cruz"
+      },
+      "DREY-016": {
+        "name": "Dr. Ester Yu"
+      },
+      "MRAP-017": {
+        "name": "Mr. Angelo Peralta"
+      },
+      "DRJF-018": {
+        "name": "Dr. Janette Fermin"
+      },
+      "MRRF-019": {
+        "name": "Mr. Rogelio Fermin"
+      },
+      "MRSVS-020": {
+        "name": "Mrs. Vivian Sorita"
+      },
+      "DRBJ-021": {
+        "name": "Dr. Benjamin Jularbal"
+      },
+      "MRSKC-022": {
+        "name": "Mrs. Kristine Joy O. Cortes"
+      },
+      "MRSJS-023": {
+        "name": "Mrs. Jean Sumait"
+      },
+      "DREEC-024": {
+        "name": "Dr. Emman Earl Cacayurin"
+      },
+      "DRMT-025": {
+        "name": "Dr. Marites Tenedor"
+      },
+      "DRMJM-026": {
+        "name": "Dr. MJ Manuel"
+      }
+    }
+  }
+  
