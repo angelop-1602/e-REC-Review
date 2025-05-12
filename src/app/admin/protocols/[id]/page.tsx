@@ -28,6 +28,11 @@ interface Protocol {
   protocol_file: string;
   document_type: string;
   created_at: string;
+  spup_rec_code?: string;
+  research_title?: string;
+  principal_investigator?: string;
+  adviser?: string;
+  course_program?: string;
   reassignment_history?: {
     from: string;
     to: string;
@@ -246,7 +251,10 @@ export default function ProtocolDetailPage() {
   return (
     <div className="p-6 space-y-6">
       <div className="flex justify-between items-center">
-        <h1 className="text-2xl font-bold">Protocol Details</h1>
+        <div>
+          <h1 className="text-2xl font-bold">Protocol: {protocol.spup_rec_code || protocol.id}</h1>
+          <p className="text-lg text-gray-600">{protocol.research_title || protocol.protocol_name}</p>
+        </div>
         <div className="flex space-x-2">
           <Link 
             href="/admin/protocols" 
@@ -263,8 +271,12 @@ export default function ProtocolDetailPage() {
             <h2 className="text-xl font-semibold mb-4">Protocol Information</h2>
             <div className="space-y-4">
               <div>
-                <p className="text-sm text-gray-500">Protocol Name</p>
-                <p className="font-medium">{protocol.protocol_name}</p>
+                <p className="text-sm text-gray-500">SPUP REC Code</p>
+                <p className="font-medium">{protocol.spup_rec_code || protocol.id}</p>
+              </div>
+              <div>
+                <p className="text-sm text-gray-500">Research Title</p>
+                <p className="font-medium">{protocol.research_title || protocol.protocol_name}</p>
               </div>
               <div>
                 <p className="text-sm text-gray-500">Release Period</p>
@@ -274,10 +286,30 @@ export default function ProtocolDetailPage() {
                 <p className="text-sm text-gray-500">Academic Level</p>
                 <p className="font-medium">{protocol.academic_level}</p>
               </div>
+              {protocol.course_program && (
+                <div>
+                  <p className="text-sm text-gray-500">Course/Program</p>
+                  <p className="font-medium">{protocol.course_program}</p>
+                </div>
+              )}
+              {protocol.principal_investigator && (
+                <div>
+                  <p className="text-sm text-gray-500">Principal Investigator</p>
+                  <p className="font-medium">{protocol.principal_investigator}</p>
+                </div>
+              )}
+              {protocol.adviser && (
+                <div>
+                  <p className="text-sm text-gray-500">Adviser</p>
+                  <p className="font-medium">{protocol.adviser}</p>
+                </div>
+              )}
               <div>
                 <p className="text-sm text-gray-500">Due Date</p>
                 <div className="flex items-center space-x-2">
-                  <p className="font-medium">{protocol.due_date}</p>
+                  <p className="font-medium">
+                    {protocol.due_date ? new Date(protocol.due_date).toLocaleDateString() : 'Not set'}
+                  </p>
                   {getDueDateStatus()}
                 </div>
               </div>

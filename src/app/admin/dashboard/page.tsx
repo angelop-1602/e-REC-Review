@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { collection, getDocs, query, orderBy, limit } from 'firebase/firestore';
+import { collection, getDocs, query, orderBy, limit, collectionGroup } from 'firebase/firestore';
 import { db } from '@/lib/firebaseconfig';
 import Link from 'next/link';
 import { isOverdue, isDueSoon, formatDate } from '@/lib/utils';
@@ -25,6 +25,9 @@ interface Reviewer {
   name: string;
   status: string;
   document_type?: string;
+  form_type?: string;
+  due_date?: string;
+  completed_at?: string;
 }
 
 interface Protocol {
@@ -41,6 +44,13 @@ interface Protocol {
   created_at: string;
   reviewerCount?: number;
   completedReviewerCount?: number;
+  research_title?: string;
+  e_link?: string;
+  course_program?: string;
+  spup_rec_code?: string;
+  principal_investigator?: string;
+  adviser?: string;
+  _path?: string;
 }
 
 export default function AdminDashboard() {
@@ -49,12 +59,26 @@ export default function AdminDashboard() {
   const [overdueProtocols, setOverdueProtocols] = useState<Protocol[]>([]);
   const [upcomingDueProtocols, setUpcomingDueProtocols] = useState<Protocol[]>([]);
   const [recentProtocols, setRecentProtocols] = useState<Protocol[]>([]);
+  const [overdueReviewers, setOverdueReviewers] = useState<{
+    protocolId: string;
+    spupRecCode: string;
+    reviewerId: string;
+    reviewerName: string;
+    dueDate: string;
+    protocolPath?: string;
+  }[]>([]);
   const [reviewerStats, setReviewerStats] = useState<{
     reviewerId: string;
     name: string;
     assigned: number;
     completed: number;
     overdue: number;
+  }[]>([]);
+  const [fastestReviewers, setFastestReviewers] = useState<{
+    reviewerId: string;
+    name: string;
+    averageCompletionDays: number;
+    completedCount: number;
   }[]>([]);
   const [stats, setStats] = useState({
     totalProtocols: 0,
@@ -76,24 +100,226 @@ export default function AdminDashboard() {
     datasets: []
   });
   
+  // Helper function to ensure due dates are in the correct format
+  const ensureValidDueDate = (dueDate: any): string => {
+    if (!dueDate) return '';
+    
+    // If it's already a string in YYYY-MM-DD format, return it
+    if (typeof dueDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dueDate)) {
+      return dueDate;
+    }
+    
+    // If it's a timestamp object from Firestore
+    if (dueDate && typeof dueDate === 'object' && dueDate.toDate) {
+      try {
+        const date = dueDate.toDate();
+        return date.toISOString().split('T')[0]; // Get YYYY-MM-DD part
+      } catch (err) {
+        console.error('Error converting timestamp to date:', err);
+      }
+    }
+    
+    // If it's a date string but not in YYYY-MM-DD format, try to convert it
+    if (typeof dueDate === 'string' && dueDate.trim() !== '') {
+      try {
+        const date = new Date(dueDate);
+        if (!isNaN(date.getTime())) {
+          return date.toISOString().split('T')[0]; // Get YYYY-MM-DD part
+        }
+      } catch (err) {
+        console.error('Error parsing date string:', err);
+      }
+    }
+    
+    // If we got here, we couldn't parse the due date
+    console.warn(`Could not parse due date: ${dueDate}`);
+    return '';
+  };
+  
+  // Helper function to get the most relevant due date from a protocol
+  const getLatestDueDate = (protocol: Protocol): string => {
+    // If protocol has no reviewers array or it's empty, use the protocol's due date
+    if (!protocol.reviewers || protocol.reviewers.length === 0) {
+      return ensureValidDueDate(protocol.due_date);
+    }
+    
+    // Get current date to identify in-progress reviews
+    const today = new Date().toISOString().split('T')[0];
+    
+    // Filter to only include active (non-completed) reviewers
+    const activeReviewers = protocol.reviewers.filter(r => r.status !== 'Completed');
+    
+    // If there are no active reviewers, get the latest due date from all reviewers
+    if (activeReviewers.length === 0) {
+      // For protocols that are fully completed, find the latest due date from any reviewer
+      const allDueDates = protocol.reviewers
+        .map(r => ensureValidDueDate(r.due_date))
+        .filter(date => date !== '')
+        .sort((a, b) => b.localeCompare(a)); // Sort desc
+        
+      return allDueDates.length > 0 ? allDueDates[0] : ensureValidDueDate(protocol.due_date);
+    }
+    
+    // Find the earliest upcoming due date among active reviewers
+    const upcomingDueDates = activeReviewers
+      .map(r => ensureValidDueDate(r.due_date))
+      .filter(date => date !== '' && date >= today)
+      .sort(); // Sort asc
+      
+    // If there are upcoming due dates, use the earliest one
+    if (upcomingDueDates.length > 0) {
+      return upcomingDueDates[0];
+    }
+    
+    // If there are no upcoming due dates, get the most recent overdue date
+    const overdueDates = activeReviewers
+      .map(r => ensureValidDueDate(r.due_date))
+      .filter(date => date !== '' && date < today)
+      .sort((a, b) => b.localeCompare(a)); // Sort desc
+      
+    if (overdueDates.length > 0) {
+      return overdueDates[0];
+    }
+    
+    // Fallback to protocol's due date if no reviewer due dates are available
+    return ensureValidDueDate(protocol.due_date);
+  };
+  
   useEffect(() => {
     const fetchDashboardData = async () => {
       try {
         setLoading(true);
-        const protocolsRef = collection(db, 'protocols');
-        const protocolsSnap = await getDocs(protocolsRef);
         
+        // Initialize array to hold all protocols
         const protocols: Protocol[] = [];
-        protocolsSnap.forEach((doc) => {
-          protocols.push({ ...doc.data(), id: doc.id } as Protocol);
-        });
+        
+        // Query the new hierarchical structure
+        console.log('Fetching protocols from Firebase...');
+        
+        // First, attempt to use collectionGroup query for most efficient retrieval
+        try {
+          console.log("Attempting collectionGroup query...");
+          
+          // Use collection group queries to get all protocol documents across all subcollections
+          // For each potential week collection (week-1, week-2, etc.)
+          for (let weekNum = 1; weekNum <= 4; weekNum++) {
+            const weekCollection = `week-${weekNum}`;
+            console.log(`Querying collection group: ${weekCollection}`);
+            const protocolsGroupQuery = query(collectionGroup(db, weekCollection));
+            const protocolsGroupSnapshot = await getDocs(protocolsGroupQuery);
+            
+            console.log(`Found ${protocolsGroupSnapshot.size} documents in ${weekCollection}`);
+            
+            // Process protocols from the collection group query
+            for (const protocolDoc of protocolsGroupSnapshot.docs) {
+              const data = protocolDoc.data() as Protocol;
+              const path = protocolDoc.ref.path;
+              
+              // Extract the month and week from the path
+              // Path format: "protocols/{month}/{week}/{SPUP_REC_Code}"
+              const pathParts = path.split('/');
+              if (pathParts.length < 4) {
+                console.log(`Invalid path format for protocol: ${path}`);
+                continue;
+              }
+              
+              const monthId = pathParts[1];
+              const weekId = pathParts[2];
+              
+              // Create a mapped protocol that works with our UI
+              const mappedProtocol: Protocol = {
+                ...data,
+                id: protocolDoc.id,
+                // Map new field names to consistent names for the UI
+                protocol_name: data.research_title || '',
+                protocol_file: data.e_link || '',
+                release_period: `${monthId} ${weekId}`,
+                academic_level: data.course_program || '',
+                // Ensure the due date is valid and in the correct format
+                due_date: ensureValidDueDate(data.due_date),
+                // Add missing required fields with defaults if not present in data
+                status: data.status || 'In Progress',
+                created_at: data.created_at || new Date().toISOString(),
+                // Add metadata for tracking
+                _path: `${monthId}/${weekId}/${protocolDoc.id}`
+              };
+              
+              protocols.push(mappedProtocol);
+            }
+          }
+        } catch (err) {
+          console.error("CollectionGroup query failed, falling back to hierarchical queries:", err);
+          
+          // Fallback to hierarchical queries if collectionGroup is not set up
+          // First get all month documents
+          const monthsRef = collection(db, 'protocols');
+          console.log(`Fetching months from protocols collection...`);
+          const monthsSnapshot = await getDocs(monthsRef);
+          console.log(`Found ${monthsSnapshot.docs.length} documents in protocols collection`);
+          
+          // For each month, get all weeks
+          for (const monthDoc of monthsSnapshot.docs) {
+            const monthId = monthDoc.id;
+            console.log(`Processing month: ${monthId}`);
+            
+            try {
+              // Get weeks within this month
+              const weeksRef = collection(monthDoc.ref, monthId);
+              console.log(`Fetching weeks for month ${monthId}...`);
+              const weeksSnapshot = await getDocs(weeksRef);
+              console.log(`Found ${weeksSnapshot.docs.length} weeks for month ${monthId}`);
+              
+              // For each week, get all protocols
+              for (const weekDoc of weeksSnapshot.docs) {
+                const weekId = weekDoc.id;
+                console.log(`Processing week: ${weekId} in month ${monthId}`);
+                
+                // Get protocols within this week
+                const protocolsRef = collection(weekDoc.ref, weekId);
+                console.log(`Fetching protocols for ${monthId}/${weekId}...`);
+                const protocolsSnapshot = await getDocs(protocolsRef);
+                console.log(`Found ${protocolsSnapshot.docs.length} protocols in ${monthId}/${weekId}`);
+                
+                for (const protocolDoc of protocolsSnapshot.docs) {
+                  const data = protocolDoc.data();
+                  
+                  // Create a mapped protocol that works with our UI
+                  const mappedProtocol: Protocol = {
+                    ...data,
+                    id: protocolDoc.id,
+                    // Map new field names to consistent names for the UI
+                    protocol_name: data.research_title || '',
+                    protocol_file: data.e_link || '',
+                    release_period: `${monthId} ${weekId}`,
+                    academic_level: data.course_program || '',
+                    // Ensure the due date is valid and in the correct format
+                    due_date: ensureValidDueDate(data.due_date),
+                    // Add missing required fields with defaults if not present in data
+                    status: data.status || 'In Progress',
+                    created_at: data.created_at || new Date().toISOString(),
+                    // Add metadata for tracking
+                    _path: `${monthId}/${weekId}/${protocolDoc.id}`
+                  };
+                  
+                  protocols.push(mappedProtocol);
+                }
+              }
+            } catch (err) {
+              console.error(`Error fetching protocols for month ${monthId}:`, err);
+              // Continue with other months even if one fails
+            }
+          }
+        }
+        
+        console.log(`Fetched a total of ${protocols.length} protocols.`);
         
         // Group protocols by protocol_name
         const protocolGroups = protocols.reduce((acc, protocol) => {
-          if (!acc[protocol.protocol_name]) {
-            acc[protocol.protocol_name] = [];
+          const key = protocol.protocol_name || 'Unknown';
+          if (!acc[key]) {
+            acc[key] = [];
           }
-          acc[protocol.protocol_name].push(protocol);
+          acc[key].push(protocol);
           return acc;
         }, {} as Record<string, Protocol[]>);
         
@@ -133,7 +359,9 @@ export default function AdminDashboard() {
             ...baseProtocol,
             status: overallStatus,
             reviewerCount,
-            completedReviewerCount
+            completedReviewerCount,
+            // Add related protocols for reference
+            relatedProtocols: items
           };
         });
         
@@ -316,6 +544,90 @@ export default function AdminDashboard() {
           inProgressCount: inProgress + partiallyCompleted,
           dueSoonCount: upcoming.length
         });
+        
+        // Extract overdue reviewers from all protocols
+        const extractedOverdueReviewers: {
+          protocolId: string;
+          spupRecCode: string;
+          reviewerId: string;
+          reviewerName: string;
+          dueDate: string;
+          protocolPath?: string;
+        }[] = [];
+        
+        // Collect data for calculating fastest reviewers
+        const reviewerCompletionTimes: Record<string, {
+          reviewerId: string,
+          name: string,
+          completionTimes: number[],  // Time in days
+          completedCount: number
+        }> = {};
+        
+        protocols.forEach(protocol => {
+          if (protocol.reviewers && protocol.reviewers.length > 0) {
+            protocol.reviewers.forEach(reviewer => {
+              // Process overdue reviewers
+              const reviewerDueDate = ensureValidDueDate(reviewer.due_date || '');
+              if (reviewer.status !== 'Completed' && reviewerDueDate && isOverdue(reviewerDueDate)) {
+                extractedOverdueReviewers.push({
+                  protocolId: protocol.id,
+                  spupRecCode: protocol.spup_rec_code || protocol.id,
+                  reviewerId: reviewer.id,
+                  reviewerName: reviewer.name,
+                  dueDate: reviewerDueDate,
+                  protocolPath: protocol._path
+                });
+              }
+              
+              // Process completed reviews for speed calculation
+              if (reviewer.status === 'Completed' && reviewer.completed_at && reviewer.due_date) {
+                const dueDate = new Date(ensureValidDueDate(reviewer.due_date));
+                const completedDate = new Date(reviewer.completed_at);
+                
+                // Skip invalid dates
+                if (isNaN(dueDate.getTime()) || isNaN(completedDate.getTime())) {
+                  return;
+                }
+                
+                // Get days between assignment and completion
+                // If completed before due date, this will be negative (good)
+                // If completed after due date, this will be positive (not good)
+                const daysDifference = (completedDate.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24);
+                
+                // Store the reviewer's completion time
+                if (!reviewerCompletionTimes[reviewer.id]) {
+                  reviewerCompletionTimes[reviewer.id] = {
+                    reviewerId: reviewer.id,
+                    name: reviewer.name,
+                    completionTimes: [],
+                    completedCount: 0
+                  };
+                }
+                
+                reviewerCompletionTimes[reviewer.id].completionTimes.push(daysDifference);
+                reviewerCompletionTimes[reviewer.id].completedCount++;
+              }
+            });
+          }
+        });
+        
+        // Sort by due date (oldest first)
+        extractedOverdueReviewers.sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+        setOverdueReviewers(extractedOverdueReviewers);
+        
+        // Calculate average completion times and find fastest reviewers
+        const fastestReviewersArray = Object.values(reviewerCompletionTimes)
+          .filter(reviewer => reviewer.completedCount >= 3) // Only include reviewers with at least 3 completed reviews
+          .map(reviewer => ({
+            reviewerId: reviewer.reviewerId,
+            name: reviewer.name,
+            averageCompletionDays: reviewer.completionTimes.reduce((sum, time) => sum + time, 0) / reviewer.completionTimes.length,
+            completedCount: reviewer.completedCount
+          }))
+          .sort((a, b) => a.averageCompletionDays - b.averageCompletionDays) // Sort by average time (ascending)
+          .slice(0, 5); // Get top 5
+        
+        setFastestReviewers(fastestReviewersArray);
       } catch (err) {
         console.error("Error fetching dashboard data:", err);
         setError("Failed to load dashboard data");
@@ -446,7 +758,7 @@ export default function AdminDashboard() {
         {/* Overdue Protocols */}
         <div className="bg-white rounded-lg shadow-md">
           <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
-            <h3 className="text-lg font-medium text-gray-900">Overdue Protocols</h3>
+            <h3 className="text-lg font-medium text-gray-900">Overdue Reviewers</h3>
             <Link 
               href="/admin/due-dates?filter=overdue" 
               className="text-blue-600 hover:text-blue-800 text-sm"
@@ -455,26 +767,37 @@ export default function AdminDashboard() {
             </Link>
           </div>
           <div className="p-4">
-            {overdueProtocols.length > 0 ? (
+            {overdueReviewers.length > 0 ? (
               <ul className="divide-y divide-gray-200">
-                {overdueProtocols.map((protocol) => (
-                  <li key={protocol.id} className="py-3">
+                {overdueReviewers.slice(0, 5).map((item, index) => (
+                  <li key={index} className="py-3">
                     <div className="flex justify-between">
                       <div>
-                        <p className="text-sm font-medium text-gray-900">{protocol.protocol_name}</p>
+                        <p className="text-sm font-medium text-gray-900">
+                          {item.spupRecCode}
+                        </p>
                         <p className="text-xs text-gray-500">
-                          Due: {formatDate(protocol.due_date)} · {protocol.release_period}
+                          Reviewer: <span className="font-medium">{item.reviewerName}</span>
+                        </p>
+                        <p className="text-xs text-gray-500">
+                          Due: {formatDate(item.dueDate)}
                         </p>
                       </div>
-                      <div>
-                        {getStatusBadge(protocol.status, protocol.due_date)}
+                      <div className="flex flex-col items-end">
+                        <span className="bg-red-100 text-red-800 text-xs px-2 py-1 rounded-full mb-2">Overdue</span>
+                        <Link 
+                          href={`/admin/protocols/${item.protocolId}/reviewer/${item.reviewerName}/reassign`}
+                          className="text-blue-600 hover:text-blue-800 text-xs"
+                        >
+                          Reassign
+                        </Link>
                       </div>
                     </div>
                   </li>
                 ))}
               </ul>
             ) : (
-              <p className="text-center py-4 text-gray-500">No overdue protocols.</p>
+              <p className="text-center py-4 text-gray-500">No overdue reviewers.</p>
             )}
           </div>
         </div>
@@ -497,7 +820,12 @@ export default function AdminDashboard() {
                   <li key={protocol.id} className="py-3">
                     <div className="flex justify-between">
                       <div>
-                        <p className="text-sm font-medium text-gray-900">{protocol.protocol_name}</p>
+                        <p className="text-sm font-medium text-gray-900">
+                          {protocol.spup_rec_code || protocol.id}
+                        </p>
+                        <p className="text-xs text-gray-500">
+                          {protocol.principal_investigator || 'No Principal Investigator'}
+                        </p>
                         <p className="text-xs text-gray-500">
                           Due: {formatDate(protocol.due_date)} · {protocol.release_period}
                         </p>
@@ -532,7 +860,12 @@ export default function AdminDashboard() {
                   <li key={protocol.id} className="py-3">
                     <div className="flex justify-between">
                       <div>
-                        <p className="text-sm font-medium text-gray-900">{protocol.protocol_name}</p>
+                        <p className="text-sm font-medium text-gray-900">
+                          {protocol.spup_rec_code || protocol.id}
+                        </p>
+                        <p className="text-xs text-gray-500">
+                          {protocol.principal_investigator || 'No Principal Investigator'}
+                        </p>
                         <p className="text-xs text-gray-500">
                           Added: {(() => {
                             try {
@@ -549,7 +882,7 @@ export default function AdminDashboard() {
                         </p>
                       </div>
                       <div>
-                        {getStatusBadge(protocol.status, protocol.due_date)}
+                        {getStatusBadge(protocol.status, getLatestDueDate(protocol))}
                       </div>
                     </div>
                   </li>
@@ -561,49 +894,49 @@ export default function AdminDashboard() {
           </div>
         </div>
         
-        {/* Top Reviewers */}
+        {/* Fastest Reviewers */}
         <div className="bg-white rounded-lg shadow-md">
           <div className="px-6 py-4 border-b border-gray-200">
-            <h3 className="text-lg font-medium text-gray-900">Top Reviewers</h3>
+            <h3 className="text-lg font-medium text-gray-900">Fastest Reviewers</h3>
           </div>
           <div className="p-4">
-            {reviewerStats.length > 0 ? (
+            {fastestReviewers.length > 0 ? (
               <ul className="divide-y divide-gray-200">
-                {reviewerStats.map((reviewer, index) => (
+                {fastestReviewers.map((reviewer, index) => (
                   <li key={index} className="py-3">
                     <div className="flex justify-between items-center">
                       <div>
                         <p className="text-sm font-medium text-gray-900">{reviewer.name}</p>
                         <p className="text-xs text-gray-500">
-                          {reviewer.completed} completed of {reviewer.assigned} assigned
+                          {reviewer.completedCount} reviews completed
                         </p>
                       </div>
                       <div className="flex items-center">
-                        {reviewer.overdue > 0 && (
-                          <span className="bg-red-100 text-red-800 text-xs px-2 py-1 rounded-full mr-2">
-                            {reviewer.overdue} overdue
-                          </span>
-                        )}
-                        <div className="w-16 bg-gray-200 rounded-full h-2.5">
-                          <div 
-                            className="bg-blue-600 h-2.5 rounded-full" 
-                            style={{ width: `${reviewer.completed / reviewer.assigned * 100}%` }}
-                          ></div>
-                        </div>
+                        <span className={`px-2 py-1 text-xs rounded-full ${
+                          reviewer.averageCompletionDays <= 0 
+                            ? 'bg-green-100 text-green-800' 
+                            : reviewer.averageCompletionDays <= 2
+                              ? 'bg-blue-100 text-blue-800'
+                              : 'bg-yellow-100 text-yellow-800'
+                        }`}>
+                          {reviewer.averageCompletionDays <= 0 
+                            ? `${Math.abs(reviewer.averageCompletionDays).toFixed(1)} days early`
+                            : `${reviewer.averageCompletionDays.toFixed(1)} days to complete`}
+                        </span>
                       </div>
                     </div>
                   </li>
                 ))}
               </ul>
             ) : (
-              <p className="text-center py-4 text-gray-500">No reviewer data available.</p>
+              <p className="text-center py-4 text-gray-500">No reviewer completion data available.</p>
             )}
           </div>
         </div>
       </div>
       
       {/* Add Completion Chart by Release Period */}
-      <div className="bg-white rounded-lg shadow p-6 mb-8">
+      <div className="bg-white rounded-lg shadow p-6 my-8">
         <h2 className="text-xl font-bold mb-4">Protocol Completion by Release Period</h2>
         
         {loading ? (

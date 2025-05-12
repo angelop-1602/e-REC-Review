@@ -1,9 +1,9 @@
 'use client';
 
 import { useState, ChangeEvent } from 'react';
-import { collection, doc, writeBatch } from 'firebase/firestore';
+import { collection, doc, writeBatch, setDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebaseconfig';
-import { getFormTypeName } from '@/lib/utils';
+import { getFormTypeName, processReleaseInfo } from '@/lib/utils';
 
 // CSV Parser function
 const parseCSV = (csvText: string) => {
@@ -41,8 +41,34 @@ const mapToProtocolData = (csvEntry: Record<string, string>, filename: string) =
   const documentField = csvEntry['Document'] || '';
   const linkField = csvEntry['Link'] || csvEntry['Folder Link'] || '';
   
+  // Extract SPUP_REC_Code if available or generate one
+  const spupRecCode = csvEntry['SPUP_REC_Code'] || 
+                     csvEntry['REC Code'] || 
+                     csvEntry['Protocol ID'] || 
+                     `REC-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`;
+  
+  // Extract principal investigator if available
+  const principalInvestigator = csvEntry['Principal Investigator'] || 
+                               csvEntry['PI'] || 
+                               csvEntry['Investigator'] || 
+                               '';
+  
+  // Extract adviser if available
+  const adviser = csvEntry['Adviser'] || 
+                 csvEntry['Advisor'] || 
+                 '';
+  
+  // Extract course/program if available
+  const courseProgram = csvEntry['Course'] || 
+                       csvEntry['Program'] || 
+                       csvEntry['Course/Program'] || 
+                       '';
+  
   // Extract release period from filename (e.g., first-release, april_1stweek)
   let releasePeriod = 'Unknown';
+  let monthId = '';
+  let weekId = '';
+  
   if (filename.includes('first-release')) {
     releasePeriod = 'First';
   } else if (filename.includes('second-release')) {
@@ -51,12 +77,21 @@ const mapToProtocolData = (csvEntry: Record<string, string>, filename: string) =
     releasePeriod = 'Third';
   } else if (filename.includes('fourth-release')) {
     releasePeriod = 'Fourth';
-  } else if (filename.includes('april') || filename.includes('may')) {
-    // Extract the week information
+  } else {
+    // Check for month-week format (e.g., april_1stweek, may_2ndweek)
+    const monthMatch = filename.match(/(january|february|march|april|may|june|july|august|september|october|november|december)/i);
     const weekMatch = filename.match(/(1st|2nd|3rd|4th)week/);
-    const monthMatch = filename.match(/(april|may)/i);
-    if (weekMatch && monthMatch) {
-      releasePeriod = `${monthMatch[0].charAt(0).toUpperCase() + monthMatch[0].slice(1)} ${weekMatch[0].replace('week', 'Week')}`;
+    
+    if (monthMatch && weekMatch) {
+      const month = monthMatch[0].charAt(0).toUpperCase() + monthMatch[0].slice(1).toLowerCase();
+      const week = weekMatch[0].replace('week', '');
+      
+      // Extract month and year for the hierarchical path
+      const currentYear = new Date().getFullYear();
+      monthId = `${month}${currentYear}`;
+      weekId = `week-${week.replace(/[a-z]/g, '')}`;
+      
+      releasePeriod = `${month} ${week} Week`;
     }
   }
   
@@ -65,6 +100,15 @@ const mapToProtocolData = (csvEntry: Record<string, string>, filename: string) =
   if (filename.includes('graduate')) {
     academicLevel = 'Graduate';
   } else if (filename.includes('undergraduate')) {
+    academicLevel = 'Undergraduate';
+  } else if (courseProgram && (
+    courseProgram.includes('PhD') || 
+    courseProgram.includes('Master') || 
+    courseProgram.includes('MS') || 
+    courseProgram.includes('MA')
+  )) {
+    academicLevel = 'Graduate';
+  } else if (courseProgram) {
     academicLevel = 'Undergraduate';
   }
   
@@ -79,13 +123,16 @@ const mapToProtocolData = (csvEntry: Record<string, string>, filename: string) =
     : reviewerField; // Use as is if it looks like a code already
   
   // Generate a unique document ID combining folder, form (document type), and reviewer code
-  const docId = `${protocolNameField.replace(/\s+/g, '_')}_${documentField.replace(/\s+/g, '_')}_${reviewerCode}`;
+  const docId = spupRecCode || `${protocolNameField.replace(/\s+/g, '_')}_${documentField.replace(/\s+/g, '_')}_${reviewerCode}`;
   
   // Create a reviewer object with status
   const reviewerObj = {
-    id: docId, // Use the new ID format
+    id: reviewerCode,
     name: reviewerField,
-    status: 'In Progress'
+    status: 'In Progress',
+    document_type: documentField,
+    form_type: documentField,
+    due_date: dueDate.toISOString().split('T')[0]
   };
   
   return {
@@ -99,11 +146,20 @@ const mapToProtocolData = (csvEntry: Record<string, string>, filename: string) =
     status: 'In Progress',
     protocol_file: linkField,
     document_type: documentField,
-    created_at: new Date().toISOString()
+    created_at: new Date().toISOString(),
+    // New fields for the new hierarchical structure
+    research_title: protocolNameField,
+    e_link: linkField,
+    course_program: courseProgram,
+    spup_rec_code: spupRecCode,
+    principal_investigator: principalInvestigator,
+    adviser: adviser,
+    // Metadata for upload
+    _path: monthId && weekId ? `${monthId}/${weekId}/${docId}` : null
   };
 };
 
-// Update this interface to include a reviewers array with status for each reviewer
+// Update this interface to include both old and new structure fields
 interface MappedProtocol {
   id: string;
   protocol_name: string;
@@ -113,13 +169,25 @@ interface MappedProtocol {
   reviewers: { 
     id: string; 
     name: string; 
-    status: string; // Status for each individual reviewer
+    status: string;
+    document_type?: string;
+    form_type?: string;
+    due_date?: string;
   }[]; // New array of reviewers
   due_date: string;
   status: string; // Overall protocol status
   protocol_file: string;
   document_type: string;
   created_at: string;
+  // New fields for the new structure
+  research_title?: string;
+  e_link?: string;
+  course_program?: string;
+  spup_rec_code?: string;
+  principal_investigator?: string;
+  adviser?: string;
+  // Metadata for upload
+  _path?: string | null;
 }
 
 // Define types to replace any
@@ -129,11 +197,11 @@ interface ParsedData {
 
 export default function CSVUploadPage() {
   const [file, setFile] = useState<File | null>(null);
-  const [loading, setLoading] = useState<boolean>(false);
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
   const [parsedData, setParsedData] = useState<ParsedData[] | null>(null);
   const [mappedData, setMappedData] = useState<MappedProtocol[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
   
   const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
@@ -202,8 +270,8 @@ export default function CSVUploadPage() {
     try {
       const batch = writeBatch(db);
       
-      // Track which reviewers exist to avoid duplicates
-      const reviewersProcessed = new Set();
+      // Track which protocols have been processed
+      const protocolsProcessed = new Set();
       
       // Group protocols by protocol_name
       const protocolGroups = mappedData.reduce((acc, protocol) => {
@@ -214,261 +282,225 @@ export default function CSVUploadPage() {
         return acc;
       }, {} as Record<string, MappedProtocol[]>);
       
+      let successCount = 0;
+      
       // Process each group of protocols (same protocol_name)
-      (Object.entries(protocolGroups) as [string, MappedProtocol[]][]).forEach(([protocolName, protocols]) => {
-        // Use the first protocol as the base
-        const baseProtocol = protocols[0];
-        
-        // Create an array of reviewers from all protocols in this group
-        const reviewers = protocols.map((p: MappedProtocol) => {
-          // Extract reviewer code from name or use as is if already a code
-          const reviewerCode = p.reviewer.split(' ').length > 1 
-            ? p.reviewer.split(' ').map((word: string) => word.charAt(0)).join('') // Get initials if it's a name
-            : p.reviewer; // Use as is if it looks like a code
-            
-          return {
-            id: `${protocolName.replace(/\s+/g, '_')}_${p.document_type.replace(/\s+/g, '_')}_${reviewerCode}`,
-            name: p.reviewer,
-            document_type: p.document_type,
-            due_date: p.due_date,
-            status: 'In Progress'
+      for (const [protocolName, protocols] of Object.entries(protocolGroups) as [string, MappedProtocol[]][]) {
+        try {
+          // Use the first protocol as the base
+          const baseProtocol = protocols[0];
+          
+          // Create an array of reviewers from all protocols in this group
+          const reviewers = protocols.map((p: MappedProtocol) => {
+            // Extract reviewer code from name or use as is if already a code
+            const reviewerCode = p.reviewer.split(' ').length > 1 
+              ? p.reviewer.split(' ').map((word: string) => word.charAt(0)).join('') // Get initials if it's a name
+              : p.reviewer; // Use as is if it looks like a code
+              
+            return {
+              id: reviewerCode,
+              name: p.reviewer,
+              document_type: p.document_type,
+              form_type: p.document_type, // Use same value for form_type
+              due_date: p.due_date,
+              status: 'In Progress'
+            };
+          });
+          
+          // Generate a unique document ID or use SPUP_REC_Code
+          const groupDocId = baseProtocol.spup_rec_code || 
+                           `${protocolName.replace(/\s+/g, '_')}`;
+          
+          // Prepare protocol data for upload
+          const protocolData = {
+            // Fields using new structure naming
+            research_title: protocolName,
+            e_link: baseProtocol.protocol_file,
+            course_program: baseProtocol.course_program || baseProtocol.academic_level,
+            spup_rec_code: baseProtocol.spup_rec_code || groupDocId,
+            principal_investigator: baseProtocol.principal_investigator || '',
+            adviser: baseProtocol.adviser || '',
+            // Required standard fields
+            reviewers: reviewers,
+            due_date: baseProtocol.due_date,
+            status: 'In Progress',
+            created_at: new Date().toISOString()
           };
-        });
-        
-        // Generate a unique document ID for the grouped protocol
-        const groupDocId = `${protocolName.replace(/\s+/g, '_')}`;
-        
-        // Create protocol document with grouped reviewers
-        const protocolRef = doc(collection(db, 'protocols'), groupDocId);
-        batch.set(protocolRef, {
-          protocol_name: protocolName,
-          release_period: baseProtocol.release_period,
-          academic_level: baseProtocol.academic_level,
-          reviewers: reviewers,
-          due_date: baseProtocol.due_date, // Base due date (could be the earliest)
-          status: 'In Progress',
-          protocol_file: baseProtocol.protocol_file,
-          document_type: baseProtocol.document_type, // Base document type
-          created_at: new Date().toISOString()
-        });
-        
-        // Process each reviewer
-        reviewers.forEach((reviewer: { id: string; name: string; document_type: string; due_date: string; status: string }) => {
-          if (reviewer.name && !reviewersProcessed.has(reviewer.name)) {
-            const reviewerRef = doc(collection(db, 'reviewers'), reviewer.name);
-            batch.set(reviewerRef, { 
-              name: reviewer.name
-            }, { merge: true });
-            
-            reviewersProcessed.add(reviewer.name);
+          
+          // Extract path information
+          let monthId, weekId, docId;
+          
+          if (baseProtocol._path) {
+            const pathParts = baseProtocol._path.split('/');
+            if (pathParts.length === 3) {
+              [monthId, weekId, docId] = pathParts;
+            }
           }
-        });
-      });
+          
+          // If no path provided or invalid, use release period to determine month/week
+          if (!monthId || !weekId) {
+            // Extract month and week from release period (e.g., "May 2nd Week")
+            const releaseParts = baseProtocol.release_period.split(' ');
+            if (releaseParts.length >= 2) {
+              monthId = releaseParts[0].toLowerCase(); // "May"
+              
+              // Extract week number from the release period
+              const weekMatch = baseProtocol.release_period.match(/(\d+)/);
+              if (weekMatch && weekMatch[1]) {
+                const weekNum = parseInt(weekMatch[1], 10);
+                weekId = `week-${weekNum}`;
+              } else {
+                weekId = 'week-1'; // default if we can't determine
+              }
+            } else {
+              // Default values if we can't parse
+              monthId = 'unknown';
+              weekId = 'week-1';
+            }
+          }
+          
+          // Use SPUP_REC_Code as docId, or generate one
+          docId = baseProtocol.spup_rec_code || groupDocId;
+          
+          try {
+            console.log(`Creating protocol in structure: protocols/${monthId}/${weekId}/${docId}`);
+            
+            // Create directory structure using setDoc for nested collections
+            await setDoc(
+              doc(db, 'protocols', monthId, weekId, docId),
+              protocolData
+            );
+            
+            successCount++;
+          } catch (err) {
+            console.error(`Error creating protocol ${protocolName}:`, err);
+            // Continue with other protocols even if one fails
+          }
+          
+          protocolsProcessed.add(protocolName);
+        } catch (err) {
+          console.error(`Error processing protocol group ${protocolName}:`, err);
+          // Continue with other protocols even if one fails
+        }
+      }
       
-      await batch.commit();
-      
-      // Count unique protocol groups
-      const uniqueProtocolCount = Object.keys(protocolGroups).length;
-      
-      setSuccess(`Data successfully uploaded to Firebase! ${uniqueProtocolCount} protocols with ${mappedData.length} reviewers processed.`);
-      setParsedData(null);
-      setMappedData(null);
+      setSuccess(`Successfully uploaded ${successCount} protocols to Firebase.`);
     } catch (err) {
       console.error('Error uploading to Firebase:', err);
-      setError('Failed to upload data to Firebase. Please try again.');
+      setError(`Failed to upload to Firebase: ${err instanceof Error ? err.message : 'Unknown error'}`);
     } finally {
       setLoading(false);
     }
   };
-  
+
   return (
-    <div className="space-y-8">
-      <h1 className="text-2xl font-bold">Upload CSV</h1>
+    <div className="p-4 space-y-4">
+      <h1 className="text-2xl font-semibold mb-4">CSV Protocol Upload</h1>
       
-      <div className="p-6 bg-white rounded-lg shadow-md">
-        <h2 className="text-xl font-semibold mb-4">CSV to Firebase Uploader</h2>
-        
+      <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
         <div className="mb-4">
-          <p className="mb-2">Upload a CSV file with one of the following formats:</p>
-          <div className="bg-gray-100 p-3 rounded text-sm font-mono overflow-x-auto">
-            <p>Format 1: Main Folder,Reviewer,Document,Folder Link</p>
-            <p>Format 2: Folder,Reviewer,Document,Link</p>
-          </div>
-        </div>
-        
-        <div className="mb-6">
-          <label className="block text-sm font-medium text-gray-700 mb-2">
+          <label className="block text-gray-700 text-sm font-bold mb-2" htmlFor="csvFile">
             Select CSV File
           </label>
           <input
+            className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
+            id="csvFile"
             type="file"
             accept=".csv"
             onChange={handleFileChange}
-            className="block w-full text-sm text-gray-500 
-                      file:mr-4 file:py-2 file:px-4 
-                      file:rounded-full file:border-0 
-                      file:text-sm file:font-semibold 
-                      file:bg-blue-50 file:text-blue-700 
-                      hover:file:bg-blue-100"
           />
+          {error && <p className="text-red-500 text-xs mt-1">{error}</p>}
         </div>
         
-        {error && (
-          <div className="mb-4 p-3 bg-red-100 text-red-800 rounded">
-            {error}
-          </div>
-        )}
-        
-        {success && (
-          <div className="mb-4 p-3 bg-green-100 text-green-800 rounded">
-            {success}
-          </div>
-        )}
-        
-        <div className="flex space-x-4">
+        <div className="flex space-x-2">
           <button
+            className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline"
             onClick={handleParse}
             disabled={!file || loading}
-            className="bg-blue-500 text-white py-2 px-4 rounded hover:bg-blue-600 disabled:opacity-50"
           >
             {loading ? 'Processing...' : 'Parse CSV'}
           </button>
           
-          {mappedData && (
-            <button
-              onClick={uploadToFirebase}
-              disabled={loading}
-              className="bg-green-500 text-white py-2 px-4 rounded hover:bg-green-600 disabled:opacity-50"
-            >
-              {loading ? 'Uploading...' : 'Upload to Firebase'}
-            </button>
-          )}
-          
-          <a 
-            href="/admin"
-            className="bg-gray-500 text-white py-2 px-4 rounded hover:bg-gray-600"
+          <button
+            className="bg-green-500 hover:bg-green-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline"
+            onClick={uploadToFirebase}
+            disabled={!mappedData || loading}
           >
-            Back to Dashboard
-          </a>
+            {loading ? 'Uploading...' : 'Upload to Firebase'}
+          </button>
         </div>
+        
+        {success && (
+          <div className="mt-4 p-2 bg-green-100 text-green-700 rounded">
+            {success}
+          </div>
+        )}
       </div>
       
-      {mappedData && (
-        <div className="p-6 bg-white rounded-lg shadow-md">
-          <h2 className="text-xl font-semibold mb-4">Preview Protocol Data</h2>
-          <div className="overflow-x-auto">
-            <table className="min-w-full bg-white">
-              <thead>
-                <tr className="bg-gray-100">
-                  <th className="py-2 px-4 border-b">ID</th>
-                  <th className="py-2 px-4 border-b">Protocol Name</th>
-                  <th className="py-2 px-4 border-b">Release Period</th>
-                  <th className="py-2 px-4 border-b">Academic Level</th>
-                  <th className="py-2 px-4 border-b">Reviewer</th>
-                  <th className="py-2 px-4 border-b">Due Date</th>
-                  <th className="py-2 px-4 border-b">Form Type</th>
+      {/* Display parsed data if available */}
+      {parsedData && mappedData && (
+        <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200 overflow-x-auto">
+          <h2 className="text-lg font-medium mb-2">Mapped Data Preview</h2>
+          <p className="text-sm text-gray-500 mb-4">
+            Review this data before uploading to Firebase. We've mapped your CSV to our protocol structure.
+          </p>
+          
+          <table className="min-w-full divide-y divide-gray-200">
+            <thead className="bg-gray-50">
+              <tr>
+                <th scope="col" className="px-2 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  ID/REC Code
+                </th>
+                <th scope="col" className="px-2 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Protocol Name
+                </th>
+                <th scope="col" className="px-2 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Reviewer
+                </th>
+                <th scope="col" className="px-2 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Document Type
+                </th>
+                <th scope="col" className="px-2 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Due Date
+                </th>
+                <th scope="col" className="px-2 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Release Period
+                </th>
+                <th scope="col" className="px-2 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Structure Path
+                </th>
+              </tr>
+            </thead>
+            <tbody className="bg-white divide-y divide-gray-200">
+              {mappedData.map((item, index) => (
+                <tr key={index} className={(index % 2 === 0) ? 'bg-white' : 'bg-gray-50'}>
+                  <td className="px-2 py-2 whitespace-nowrap text-sm text-gray-900">
+                    {item.spup_rec_code || item.id}
+                  </td>
+                  <td className="px-2 py-2 whitespace-nowrap text-sm text-gray-900">
+                    {item.protocol_name}
+                  </td>
+                  <td className="px-2 py-2 whitespace-nowrap text-sm text-gray-900">
+                    {item.reviewer}
+                  </td>
+                  <td className="px-2 py-2 whitespace-nowrap text-sm text-gray-900">
+                    {getFormTypeName(item.document_type)}
+                  </td>
+                  <td className="px-2 py-2 whitespace-nowrap text-sm text-gray-900">
+                    {item.due_date}
+                  </td>
+                  <td className="px-2 py-2 whitespace-nowrap text-sm text-gray-900">
+                    {item.release_period}
+                  </td>
+                  <td className="px-2 py-2 whitespace-nowrap text-sm text-gray-900">
+                    {item._path || 'No path information'}
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {mappedData.map((protocol, index) => (
-                  <tr key={index}>
-                    <td className="py-2 px-4 border-b">{protocol.id}</td>
-                    <td className="py-2 px-4 border-b">{protocol.protocol_name}</td>
-                    <td className="py-2 px-4 border-b">{protocol.release_period}</td>
-                    <td className="py-2 px-4 border-b">{protocol.academic_level}</td>
-                    <td className="py-2 px-4 border-b">{protocol.reviewer}</td>
-                    <td className="py-2 px-4 border-b">{protocol.due_date}</td>
-                    <td className="py-2 px-4 border-b">{getFormTypeName(protocol.document_type)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
-      
-      {parsedData && (
-        <div className="p-6 bg-white rounded-lg shadow-md">
-          <h2 className="text-xl font-semibold mb-4">Raw CSV Data</h2>
-          <div className="overflow-x-auto">
-            <table className="min-w-full bg-white">
-              <thead>
-                <tr className="bg-gray-100">
-                  {parsedData.length > 0 && Object.keys(parsedData[0]).map((header) => (
-                    <th key={header} className="py-2 px-4 border-b">{header}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {parsedData.map((row, index) => (
-                  <tr key={index}>
-                    {Object.values(row).map((value, i) => (
-                      <td key={i} className="py-2 px-4 border-b">{value as string}</td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-      
-      <div className="p-6 bg-white rounded-lg shadow-md">
-        <h2 className="text-xl font-semibold mb-4">JSON Structure</h2>
-        <p className="mb-2">The CSV will be converted to the following Firestore structure:</p>
-        <div className="bg-gray-100 p-3 rounded text-sm font-mono overflow-x-auto">
-          {`// Protocols Collection
-{
-  "protocols": {
-    "SPUP_2024_0729_SR_YM": {
-      "protocol_name": "SPUP_2024_0729_SR_YM",
-      "release_period": "First",
-      "academic_level": "Graduate",
-      "reviewers": [
-        {
-          "id": "SPUP_2024_0729_SR_YM_PRA_FORM_NRD",
-          "name": "Dr. Nova R. Domingo",
-          "document_type": "PRA FORM",
-          "due_date": "2024-06-01",
-          "status": "In Progress"
-        },
-        {
-          "id": "SPUP_2024_0729_SR_YM_ICA_FORM_APLB",
-          "name": "Dr. Allan Paulo L. Blaquera",
-          "document_type": "ICA FORM",
-          "due_date": "2024-06-01",
-          "status": "In Progress"
-        },
-        {
-          "id": "SPUP_2024_0729_SR_YM_PRA_FORM_JPT",
-          "name": "Mr. Jericho P. Teodoro",
-          "document_type": "PRA FORM",
-          "due_date": "2024-06-01",
-          "status": "In Progress"
-        }
-      ],
-      "status": "In Progress",
-      "protocol_file": "https://sharepoint.link",
-      "document_type": "Various",
-      "created_at": "2024-05-18T12:00:00Z"
-    }
-  },
-
-  // Reviewers Collection
-  "reviewers": {
-    "Dr. Nova R. Domingo": {
-      "name": "Dr. Nova R. Domingo"
-    },
-    "Dr. Allan Paulo L. Blaquera": {
-      "name": "Dr. Allan Paulo L. Blaquera"
-    },
-    "Mr. Jericho P. Teodoro": {
-      "name": "Mr. Jericho P. Teodoro"
-    }
-  }
-}`}
-        </div>
-      </div>
     </div>
   );
 } 

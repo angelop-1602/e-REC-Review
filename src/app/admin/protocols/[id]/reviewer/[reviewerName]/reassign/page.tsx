@@ -27,6 +27,11 @@ interface Protocol {
   protocol_file: string;
   document_type: string;
   created_at: string;
+  spup_rec_code?: string;
+  research_title?: string;
+  course_program?: string;
+  principal_investigator?: string;
+  adviser?: string;
   reassignment_history?: {
     from: string;
     to: string;
@@ -260,8 +265,12 @@ export default function ReassignReviewerPage() {
               <h2 className="text-xl font-semibold mb-4">Protocol Information</h2>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <p className="text-sm text-gray-500">Protocol Name</p>
-                  <p className="font-medium">{protocol.protocol_name}</p>
+                  <p className="text-sm text-gray-500">SPUP REC Code</p>
+                  <p className="font-medium">{protocol.spup_rec_code || protocol.id}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-gray-500">Research Title</p>
+                  <p className="font-medium">{protocol.research_title || protocol.protocol_name}</p>
                 </div>
                 <div>
                   <p className="text-sm text-gray-500">Release Period</p>

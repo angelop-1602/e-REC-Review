@@ -13,6 +13,9 @@ interface Reviewer {
   name: string;
   status: string;
   document_type?: string;
+  form_type?: string;
+  due_date?: string;
+  completed_at?: string;
 }
 
 interface Protocol {
@@ -138,18 +141,20 @@ export default function ProtocolDetailPage() {
     }
   };
   
-  const markAsCompleted = async () => {
-    if (!protocol) return;
+  const completeReview = async () => {
+    if (!protocol || !reviewer || !protocol.id) return;
     
     try {
       setStatusChanging(true);
       setSuccessMessage(null);
       
       const protocolRef = doc(db, 'protocols', protocol.id);
-      const currentTime = new Date().toISOString();
+      const completedDate = new Date().toISOString();
       
       // Update the protocol with new data
-      const updates: any = { completed_at: currentTime };
+      const updates: any = {
+        completed_at: completedDate
+      };
       
       // First update individual reviewer status in the reviewers array
       if (protocol.reviewers && Array.isArray(protocol.reviewers)) {
@@ -165,7 +170,11 @@ export default function ProtocolDetailPage() {
           const reverseIncludes = Boolean(reviewer.name && r.name && reviewer.name.toLowerCase().includes(r.name.toLowerCase()));
           
           if (idMatch || nameMatch || nameIncludes || reverseIncludes) {
-            updatedReviewers[i] = { ...r, status: 'Completed' };
+            updatedReviewers[i] = { 
+              ...r, 
+              status: 'Completed',
+              completed_at: completedDate
+            };
             userFound = true;
             break;
           }
@@ -176,7 +185,8 @@ export default function ProtocolDetailPage() {
           updatedReviewers.push({
             id: reviewer.id,
             name: reviewer.name,
-            status: 'Completed'
+            status: 'Completed',
+            completed_at: completedDate
           });
         }
         
@@ -195,7 +205,8 @@ export default function ProtocolDetailPage() {
         updates.reviewers = [{
           id: reviewer.id,
           name: reviewer.name,
-          status: 'Completed'
+          status: 'Completed',
+          completed_at: completedDate
         }];
       }
       
@@ -462,7 +473,7 @@ export default function ProtocolDetailPage() {
               </button>
             ) : (
               <button
-                onClick={markAsCompleted}
+                onClick={completeReview}
                 className="inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
                 disabled={statusChanging}
               >

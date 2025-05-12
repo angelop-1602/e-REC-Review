@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 
 interface Reviewer {
   id: string;
@@ -11,8 +11,9 @@ interface ReassignmentModalProps {
   currentReviewerName: string;
   reviewerList: Reviewer[];
   loading: boolean;
+  currentDueDate?: string;
   onCancel: () => void;
-  onReassign: (newReviewerId: string) => void;
+  onReassign: (newReviewerId: string, newDueDate?: string) => void;
 }
 
 export default function ReassignmentModal({
@@ -21,10 +22,30 @@ export default function ReassignmentModal({
   currentReviewerName,
   reviewerList,
   loading,
+  currentDueDate = '',
   onCancel,
   onReassign
 }: ReassignmentModalProps) {
-  const [selectedReviewer, setSelectedReviewer] = React.useState('');
+  const [selectedReviewer, setSelectedReviewer] = useState('');
+  const [newDueDate, setNewDueDate] = useState('');
+  
+  useEffect(() => {
+    if (isOpen) {
+      setSelectedReviewer('');
+      setNewDueDate(currentDueDate);
+    }
+  }, [isOpen, currentDueDate]);
+
+  const getDefaultDueDate = () => {
+    const today = new Date();
+    const futureDate = new Date(today);
+    futureDate.setDate(today.getDate() + 14);
+    return futureDate.toISOString().split('T')[0];
+  };
+
+  const handleResetDueDate = () => {
+    setNewDueDate(getDefaultDueDate());
+  };
 
   if (!isOpen) return null;
 
@@ -41,9 +62,14 @@ export default function ReassignmentModal({
           <p className="text-sm text-gray-600 mt-2">
             Current reviewer: <span className="font-medium">{currentReviewerName}</span>
           </p>
+          {currentDueDate && (
+            <p className="text-sm text-gray-600 mt-1">
+              Current due date: <span className="font-medium">{currentDueDate}</span>
+            </p>
+          )}
         </div>
         
-        <div className="mb-6">
+        <div className="mb-4">
           <label htmlFor="new-reviewer" className="block text-sm font-medium text-gray-700 mb-1">
             Select New Reviewer
           </label>
@@ -65,6 +91,32 @@ export default function ReassignmentModal({
           </select>
         </div>
         
+        <div className="mb-6">
+          <div className="flex justify-between items-center mb-1">
+            <label htmlFor="new-due-date" className="block text-sm font-medium text-gray-700">
+              Set New Due Date
+            </label>
+            <button 
+              type="button"
+              onClick={handleResetDueDate}
+              className="text-xs text-blue-600 hover:text-blue-800"
+            >
+              Reset to default (14 days)
+            </button>
+          </div>
+          <input
+            id="new-due-date"
+            type="date"
+            value={newDueDate}
+            onChange={(e) => setNewDueDate(e.target.value)}
+            className="w-full border border-gray-300 rounded-md py-2 px-3 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            disabled={loading}
+          />
+          <p className="text-xs text-gray-500 mt-1">
+            Leave unchanged to keep the current due date.
+          </p>
+        </div>
+        
         <div className="flex justify-end space-x-3">
           <button
             type="button"
@@ -76,7 +128,7 @@ export default function ReassignmentModal({
           </button>
           <button
             type="button"
-            onClick={() => onReassign(selectedReviewer)}
+            onClick={() => onReassign(selectedReviewer, newDueDate)}
             className="py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
             disabled={loading || !selectedReviewer}
           >

@@ -6,11 +6,14 @@ interface Reviewer {
   name: string;
   status: string;
   document_type?: string;
+  due_date?: string;
 }
 
 interface Protocol {
   id: string;
   protocol_name: string;
+  spup_rec_code?: string;
+  research_title?: string;
   release_period: string;
   academic_level: string;
   reviewer?: string;
@@ -49,6 +52,75 @@ export default function ProtocolTable({
       return <span className="bg-yellow-100 text-yellow-800 text-xs px-2 py-1 rounded-full">Due Soon</span>;
     } else {
       return <span className="bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded-full">In Progress</span>;
+    }
+  };
+
+  // Function to display due date information
+  const getDueDateDisplay = (protocol: Protocol) => {
+    // Basic due date display if no reviewers
+    if (!protocol.reviewers || protocol.reviewers.length === 0) {
+      return <span>{formatDate(protocol.due_date)}</span>;
+    }
+
+    // Get active (non-completed) reviewers
+    const activeReviewers = protocol.reviewers.filter(r => r.status !== 'Completed');
+    if (activeReviewers.length === 0) {
+      return <span className="text-green-600">{formatDate(protocol.due_date)} (Completed)</span>;
+    }
+
+    // Check for overdue reviewers
+    const overdueReviewers = activeReviewers.filter(r => {
+      const reviewerDueDate = r.due_date || protocol.due_date;
+      return isOverdue(reviewerDueDate);
+    });
+
+    // Check for due soon reviewers
+    const dueSoonReviewers = activeReviewers.filter(r => {
+      const reviewerDueDate = r.due_date || protocol.due_date;
+      return !isOverdue(reviewerDueDate) && isDueSoon(reviewerDueDate);
+    });
+
+    // Find earliest due date among active reviewers
+    let earliestDueDate = protocol.due_date;
+    activeReviewers.forEach(reviewer => {
+      const reviewerDueDate = reviewer.due_date || protocol.due_date;
+      if (reviewerDueDate && (!earliestDueDate || reviewerDueDate < earliestDueDate)) {
+        earliestDueDate = reviewerDueDate;
+      }
+    });
+
+    // Return appropriate display based on status
+    if (overdueReviewers.length > 0) {
+      return (
+        <div>
+          <span className="text-red-600 font-medium">{formatDate(earliestDueDate)}</span>
+          <div className="text-xs text-red-600">
+            {overdueReviewers.length > 1 
+              ? `${overdueReviewers.length} reviewers overdue` 
+              : '1 reviewer overdue'}
+          </div>
+        </div>
+      );
+    } else if (dueSoonReviewers.length > 0) {
+      return (
+        <div>
+          <span className="text-yellow-600 font-medium">{formatDate(earliestDueDate)}</span>
+          <div className="text-xs text-yellow-600">
+            {dueSoonReviewers.length > 1 
+              ? `${dueSoonReviewers.length} reviewers due soon` 
+              : '1 reviewer due soon'}
+          </div>
+        </div>
+      );
+    } else {
+      return (
+        <div>
+          <span>{formatDate(earliestDueDate)}</span>
+          <div className="text-xs text-gray-500">
+            {activeReviewers.length} active {activeReviewers.length === 1 ? 'reviewer' : 'reviewers'}
+          </div>
+        </div>
+      );
     }
   };
 
@@ -102,7 +174,7 @@ export default function ProtocolTable({
         <thead className="bg-gray-50">
           <tr>
             <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-              Protocol Name
+              SPUP REC Code
             </th>
             <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
               Release Period
@@ -127,13 +199,13 @@ export default function ProtocolTable({
           {protocols.map((protocol) => (
             <tr key={protocol.id} className="hover:bg-gray-50">
               <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                {protocol.protocol_name}
+                {protocol.spup_rec_code || protocol.id}
               </td>
               <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                 {protocol.release_period}
               </td>
               <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                {formatDate(protocol.due_date)}
+                {getDueDateDisplay(protocol)}
               </td>
               <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                 {getStatusLabel(protocol.status, protocol.due_date)}
@@ -150,7 +222,7 @@ export default function ProtocolTable({
                 >
                   View Details
                 </button>
-                {protocol.status !== 'Completed' && isOverdue(protocol.due_date) && onReassign && (
+                {protocol.status !== 'Completed' && onReassign && (
                   <button
                     onClick={() => {
                       if (protocol.reviewers && protocol.reviewers.length > 0) {

@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { collection, getDocs, query, orderBy, doc, updateDoc, getDoc, runTransaction } from 'firebase/firestore';
+import { collection, getDocs, query, orderBy, doc, updateDoc, getDoc, runTransaction, collectionGroup } from 'firebase/firestore';
 import { db } from '@/lib/firebaseconfig';
 import { isOverdue, isDueSoon, formatDate, getFormTypeName } from '@/lib/utils';
 import ReassignmentModal from '@/components/ReassignmentModal';
@@ -14,6 +14,7 @@ interface Reviewer {
   status: string;
   document_type?: string;
   due_date?: string;
+  form_type?: string;
 }
 
 interface Protocol {
@@ -28,6 +29,13 @@ interface Protocol {
   protocol_file: string;
   document_type?: string;
   created_at: string;
+  research_title?: string;
+  e_link?: string;
+  course_program?: string;
+  spup_rec_code?: string;
+  principal_investigator?: string;
+  adviser?: string;
+  _path?: string;
 }
 
 export default function DueDateMonitorPage() {
@@ -48,6 +56,7 @@ export default function DueDateMonitorPage() {
     reviewerId: string;
     reviewerName: string;
     loading: boolean;
+    currentDueDate: string;
   } | null>(null);
   
   const [notification, setNotification] = useState<{
@@ -77,34 +86,260 @@ export default function DueDateMonitorPage() {
     });
   };
 
+  // Helper function to ensure due dates are in the correct format
+  const ensureValidDueDate = (dueDate: any): string => {
+    if (!dueDate) return '';
+    
+    // If it's already a string in YYYY-MM-DD format, return it
+    if (typeof dueDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dueDate)) {
+      return dueDate;
+    }
+    
+    // If it's a timestamp object from Firestore
+    if (dueDate && typeof dueDate === 'object' && dueDate.toDate) {
+      try {
+        const date = dueDate.toDate();
+        return date.toISOString().split('T')[0]; // Get YYYY-MM-DD part
+      } catch (err) {
+        console.error('Error converting timestamp to date:', err);
+      }
+    }
+    
+    // If it's a date string but not in YYYY-MM-DD format, try to convert it
+    if (typeof dueDate === 'string' && dueDate.trim() !== '') {
+      try {
+        const date = new Date(dueDate);
+        if (!isNaN(date.getTime())) {
+          return date.toISOString().split('T')[0]; // Get YYYY-MM-DD part
+        }
+      } catch (err) {
+        console.error('Error parsing date string:', err);
+      }
+    }
+    
+    // If we got here, we couldn't parse the due date
+    console.warn(`Could not parse due date: ${dueDate}`);
+    return '';
+  };
+
+  // Helper function to get the most relevant due date from a protocol
+  const getLatestDueDate = (protocol: Protocol): string => {
+    // If protocol has no reviewers array or it's empty, use the protocol's due date
+    if (!protocol.reviewers || protocol.reviewers.length === 0) {
+      return ensureValidDueDate(protocol.due_date);
+    }
+    
+    // Get current date to identify in-progress reviews
+    const today = new Date().toISOString().split('T')[0];
+    
+    // Filter to only include active (non-completed) reviewers
+    const activeReviewers = protocol.reviewers.filter(r => r.status !== 'Completed');
+    
+    // If there are no active reviewers, get the latest due date from all reviewers
+    if (activeReviewers.length === 0) {
+      // For protocols that are fully completed, find the latest due date from any reviewer
+      const allDueDates = protocol.reviewers
+        .map(r => ensureValidDueDate(r.due_date))
+        .filter(date => date !== '')
+        .sort((a, b) => b.localeCompare(a)); // Sort desc
+        
+      return allDueDates.length > 0 ? allDueDates[0] : ensureValidDueDate(protocol.due_date);
+    }
+    
+    // Find the earliest upcoming due date among active reviewers
+    const upcomingDueDates = activeReviewers
+      .map(r => ensureValidDueDate(r.due_date))
+      .filter(date => date !== '' && date >= today)
+      .sort(); // Sort asc
+      
+    // If there are upcoming due dates, use the earliest one
+    if (upcomingDueDates.length > 0) {
+      return upcomingDueDates[0];
+    }
+    
+    // If there are no upcoming due dates, get the most recent overdue date
+    const overdueDates = activeReviewers
+      .map(r => ensureValidDueDate(r.due_date))
+      .filter(date => date !== '' && date < today)
+      .sort((a, b) => b.localeCompare(a)); // Sort desc
+      
+    if (overdueDates.length > 0) {
+      return overdueDates[0];
+    }
+    
+    // Fallback to protocol's due date if no reviewer due dates are available
+    return ensureValidDueDate(protocol.due_date);
+  };
+
   useEffect(() => {
     const fetchProtocols = async () => {
       try {
         setLoading(true);
         
-        // Fetch protocols
-        const protocolsQuery = query(
-          collection(db, 'protocols'),
-          orderBy('due_date', 'asc')
-        );
-        const protocolsSnapshot = await getDocs(protocolsQuery);
-        
+        // Initialize array to hold all protocols
         const fetchedProtocols: Protocol[] = [];
         const uniqueReleases = new Set<string>();
+        const uniqueReviewers = new Map<string, { id: string; name: string }>();
         
-        protocolsSnapshot.forEach((doc) => {
-          const protocol = { id: doc.id, ...doc.data() } as Protocol;
+        // Query the hierarchical structure
+        console.log('Fetching protocols from Firebase...');
+        
+        // First, attempt to use collectionGroup query for most efficient retrieval
+        try {
+          console.log("Attempting collectionGroup query...");
           
-          // Only add protocols with a valid due date
-          if (protocol.due_date && protocol.due_date.trim() !== '') {
-            fetchedProtocols.push(protocol);
+          // Use collection group queries to get all protocol documents across all subcollections
+          for (let weekNum = 1; weekNum <= 4; weekNum++) {
+            const weekCollection = `week-${weekNum}`;
+            console.log(`Querying collection group: ${weekCollection}`);
+            const protocolsGroupQuery = query(collectionGroup(db, weekCollection));
+            const protocolsGroupSnapshot = await getDocs(protocolsGroupQuery);
             
-            if (protocol.release_period) {
-              uniqueReleases.add(protocol.release_period);
+            console.log(`Found ${protocolsGroupSnapshot.size} documents in ${weekCollection}`);
+            
+            // Process protocols from the collection group query
+            for (const protocolDoc of protocolsGroupSnapshot.docs) {
+              const data = protocolDoc.data() as Protocol;
+              const path = protocolDoc.ref.path;
+              
+              // Extract the month and week from the path
+              // Path format: "protocols/{month}/{week}/{SPUP_REC_Code}"
+              const pathParts = path.split('/');
+              if (pathParts.length < 4) {
+                console.log(`Invalid path format for protocol: ${path}`);
+                continue;
+              }
+              
+              const monthId = pathParts[1];
+              const weekId = pathParts[2];
+              
+              // Create a mapped protocol that works with our UI
+              const mappedProtocol: Protocol = {
+                ...data,
+                id: protocolDoc.id,
+                // Map new field names to consistent names for the UI
+                protocol_name: data.research_title || '',
+                protocol_file: data.e_link || '',
+                release_period: `${monthId} ${weekId}`,
+                academic_level: data.course_program || '',
+                // Ensure the due date is valid and in the correct format
+                due_date: ensureValidDueDate(data.due_date),
+                // Add missing required fields with defaults if not present
+                status: data.status || 'In Progress',
+                created_at: data.created_at || new Date().toISOString(),
+                // Add metadata for tracking
+                _path: `${monthId}/${weekId}/${protocolDoc.id}`
+              };
+              
+              // Only add protocols with a valid due date
+              if (mappedProtocol.due_date && mappedProtocol.due_date.trim() !== '') {
+                fetchedProtocols.push(mappedProtocol);
+                
+                if (mappedProtocol.release_period) {
+                  uniqueReleases.add(mappedProtocol.release_period);
+                }
+                
+                // Extract reviewers for filters
+                if (mappedProtocol.reviewers && mappedProtocol.reviewers.length > 0) {
+                  mappedProtocol.reviewers.forEach((reviewer: Reviewer) => {
+                    if (reviewer.id && reviewer.name) {
+                      uniqueReviewers.set(reviewer.id, {
+                        id: reviewer.id,
+                        name: reviewer.name
+                      });
+                    }
+                  });
+                }
+              }
             }
           }
-        });
+        } catch (err) {
+          console.error("CollectionGroup query failed, falling back to hierarchical queries:", err);
+          
+          // Fallback to hierarchical queries if collectionGroup is not set up
+          // First get all month documents
+          const monthsRef = collection(db, 'protocols');
+          console.log(`Fetching months from protocols collection...`);
+          const monthsSnapshot = await getDocs(monthsRef);
+          console.log(`Found ${monthsSnapshot.docs.length} documents in protocols collection`);
+          
+          // For each month, get all weeks
+          for (const monthDoc of monthsSnapshot.docs) {
+            const monthId = monthDoc.id;
+            console.log(`Processing month: ${monthId}`);
+            
+            try {
+              // Get weeks within this month
+              const weeksRef = collection(monthDoc.ref, monthId);
+              console.log(`Fetching weeks for month ${monthId}...`);
+              const weeksSnapshot = await getDocs(weeksRef);
+              console.log(`Found ${weeksSnapshot.docs.length} weeks for month ${monthId}`);
+              
+              // For each week, get all protocols
+              for (const weekDoc of weeksSnapshot.docs) {
+                const weekId = weekDoc.id;
+                console.log(`Processing week: ${weekId} in month ${monthId}`);
+                
+                // Get protocols within this week
+                const protocolsRef = collection(weekDoc.ref, weekId);
+                console.log(`Fetching protocols for ${monthId}/${weekId}...`);
+                const protocolsSnapshot = await getDocs(protocolsRef);
+                console.log(`Found ${protocolsSnapshot.docs.length} protocols in ${monthId}/${weekId}`);
+                
+                for (const protocolDoc of protocolsSnapshot.docs) {
+                  const data = protocolDoc.data();
+                  
+                  // Create a mapped protocol that works with our UI
+                  const mappedProtocol: Protocol = {
+                    ...data,
+                    id: protocolDoc.id,
+                    // Map new field names to consistent names for the UI
+                    protocol_name: data.research_title || '',
+                    protocol_file: data.e_link || '',
+                    release_period: `${monthId} ${weekId}`,
+                    academic_level: data.course_program || '',
+                    // Ensure the due date is valid and in the correct format
+                    due_date: ensureValidDueDate(data.due_date),
+                    // Add missing required fields with defaults if not present in data
+                    status: data.status || 'In Progress',
+                    created_at: data.created_at || new Date().toISOString(),
+                    // Add metadata for tracking
+                    _path: `${monthId}/${weekId}/${protocolDoc.id}`
+                  };
+                  
+                  // Only add protocols with a valid due date
+                  if (mappedProtocol.due_date && mappedProtocol.due_date.trim() !== '') {
+                    fetchedProtocols.push(mappedProtocol);
+                    
+                    if (mappedProtocol.release_period) {
+                      uniqueReleases.add(mappedProtocol.release_period);
+                    }
+                    
+                    // Extract reviewers for filters
+                    if (mappedProtocol.reviewers && mappedProtocol.reviewers.length > 0) {
+                      mappedProtocol.reviewers.forEach((reviewer: Reviewer) => {
+                        if (reviewer.id && reviewer.name) {
+                          uniqueReviewers.set(reviewer.id, {
+                            id: reviewer.id,
+                            name: reviewer.name
+                          });
+                        }
+                      });
+                    }
+                  }
+                }
+              }
+            } catch (err) {
+              console.error(`Error fetching protocols for month ${monthId}:`, err);
+              // Continue with other months even if one fails
+            }
+          }
+        }
         
+        console.log(`Fetched a total of ${fetchedProtocols.length} protocols with due dates.`);
+        
+        // Convert uniqueReviewers map to array for the reviewer list dropdown
+        setReviewerList(Array.from(uniqueReviewers.values()));
         setProtocols(fetchedProtocols);
         
         // Sort release periods chronologically
@@ -129,29 +364,6 @@ export default function DueDateMonitorPage() {
         });
         
         setReleaseOptions(sortedReleases);
-        
-        // Extract unique reviewers from protocols for the reassignment dropdown
-        const uniqueReviewers = new Map<string, {id: string; name: string}>();
-        
-        fetchedProtocols.forEach(protocol => {
-          if (protocol.reviewers && protocol.reviewers.length > 0) {
-            protocol.reviewers.forEach(reviewer => {
-              if (reviewer.id && reviewer.name) {
-                uniqueReviewers.set(reviewer.id, {
-                  id: reviewer.id,
-                  name: reviewer.name
-                });
-              }
-            });
-          } else if (protocol.reviewer) {
-            uniqueReviewers.set(protocol.reviewer, {
-              id: protocol.reviewer,
-              name: protocol.reviewer
-            });
-          }
-        });
-        
-        setReviewerList(Array.from(uniqueReviewers.values()));
       } catch (err) {
         console.error('Error fetching protocols:', err);
         showNotification('error', 'Error', 'Failed to load protocols');
@@ -204,135 +416,149 @@ export default function DueDateMonitorPage() {
   };
 
   const initiateReassign = (protocol: Protocol, reviewerId: string, reviewerName: string) => {
+    // Find the reviewer's current due date
+    let currentDueDate = '';
+    if (protocol.reviewers && protocol.reviewers.length > 0) {
+      const reviewer = protocol.reviewers.find(r => r.id === reviewerId);
+      if (reviewer && reviewer.due_date) {
+        currentDueDate = ensureValidDueDate(reviewer.due_date);
+      }
+    }
+    
     setReassignmentData({
       protocolId: protocol.id,
-      protocolName: protocol.protocol_name,
+      protocolName: protocol.protocol_name || protocol.research_title || '',
       reviewerId,
       reviewerName,
-      loading: false
+      loading: false,
+      currentDueDate: currentDueDate || protocol.due_date
     });
     setReassignModalOpen(true);
   };
 
-  const handleReassign = async (newReviewerId: string) => {
-    if (!reassignmentData || !newReviewerId) {
-      showNotification('error', 'Error', 'Missing reassignment data or new reviewer');
-      return;
-    }
-
+  const handleReassign = async (newReviewerId: string, newDueDate?: string) => {
     try {
+      if (!reassignmentData) return;
+      
       setReassignmentData({
         ...reassignmentData,
         loading: true
       });
-
-      // Use a transaction to ensure data consistency
-      await runTransaction(db, async (transaction) => {
-        // Get protocol document
-        const protocolRef = doc(db, 'protocols', reassignmentData.protocolId);
-        const protocolSnap = await transaction.get(protocolRef);
-        
-        if (!protocolSnap.exists()) {
-          throw new Error('Protocol not found');
-        }
-        
-        const protocolData = protocolSnap.data() as Protocol;
-        
-        // Find the new reviewer details
-        const newReviewer = reviewerList.find(r => r.id === newReviewerId);
-        
-        if (!newReviewer) {
-          throw new Error('New reviewer not found');
-        }
-        
-        // Update the reviewers array with the new assignment
-        let updatedReviewers: Reviewer[] = [];
-        let documentType = '';
-        
-        if (protocolData.reviewers && protocolData.reviewers.length > 0) {
-          // Find and update the specific reviewer
-          updatedReviewers = protocolData.reviewers.map(reviewer => {
-            if (reviewer.id === reassignmentData.reviewerId) {
-              documentType = reviewer.document_type || '';
-              return {
-                ...reviewer,
-                id: newReviewerId,
-                name: newReviewer.name,
-                status: 'In Progress'
-              };
-            }
-            return reviewer;
-          });
-          
-          // Update the document with the new reviewers array
-          transaction.update(protocolRef, { 
-            reviewers: updatedReviewers,
-            // Reset status if this was the only overdue reviewer
-            status: updatedReviewers.some(r => r.status === 'Completed') ? 'Partially Completed' : 'In Progress'
-          });
-        } else if (protocolData.reviewer === reassignmentData.reviewerId) {
-          // Update single reviewer field
-          documentType = protocolData.document_type || '';
-          
-          transaction.update(protocolRef, {
-            reviewer: newReviewerId,
-            status: 'In Progress'
-          });
+      
+      const { protocolId, reviewerId, currentDueDate } = reassignmentData;
+      const protocol = protocols.find(p => p.id === protocolId);
+      
+      if (!protocol) {
+        showNotification('error', 'Error', 'Protocol not found');
+        return;
+      }
+      
+      // Get the document reference using the protocol path
+      let protocolRef;
+      if (protocol._path) {
+        const pathParts = protocol._path.split('/');
+        if (pathParts.length === 3) {
+          const [month, week, id] = pathParts;
+          protocolRef = doc(db, 'protocols', month, week, id);
         } else {
-          throw new Error('Reviewer not found in protocol');
+          showNotification('error', 'Error', 'Invalid protocol path format');
+          return;
         }
+      } else {
+        showNotification('error', 'Error', 'Protocol path information missing');
+        return;
+      }
+      
+      // Get the current protocol data
+      const protocolDoc = await getDoc(protocolRef);
+      
+      if (!protocolDoc.exists()) {
+        showNotification('error', 'Error', 'Protocol document not found');
+        return;
+      }
+      
+      const protocolData = protocolDoc.data();
+      
+      // Find the new reviewer from the list to get their name
+      const newReviewer = reviewerList.find(r => r.id === newReviewerId);
+      if (!newReviewer) {
+        showNotification('error', 'Error', 'New reviewer not found');
+        return;
+      }
+      
+      // Use the provided new due date or keep the current one
+      const dueDateToUse = newDueDate || currentDueDate;
+      
+      // Create updated reviewers array
+      let updatedReviewers: Reviewer[] = [];
+      
+      // Handle protocols with reviewers array
+      if (protocolData.reviewers && Array.isArray(protocolData.reviewers)) {
+        // Find the reviewer to replace
+        updatedReviewers = [...protocolData.reviewers];
+        
+        // Find the reviewer index
+        const reviewerIndex = updatedReviewers.findIndex(r => r.id === reviewerId);
+        
+        if (reviewerIndex >= 0) {
+          // Replace the reviewer, keeping other properties the same but updating due date
+          updatedReviewers[reviewerIndex] = {
+            ...updatedReviewers[reviewerIndex],
+            id: newReviewer.id,
+            name: newReviewer.name,
+            status: 'In Progress', // Reset status for new reviewer
+            due_date: dueDateToUse // Use new due date
+          };
+        }
+      } 
+      // Handle protocols with single reviewer field - convert to reviewers array
+      else if (protocolData.reviewer) {
+        // Create a reviewers array with the new reviewer
+        updatedReviewers = [{
+          id: newReviewer.id,
+          name: newReviewer.name,
+          status: 'In Progress',
+          document_type: protocolData.document_type,
+          form_type: protocolData.document_type || protocolData.form_type,
+          due_date: dueDateToUse
+        }];
+      }
+      
+      // Update the document
+      await updateDoc(protocolRef, {
+        reviewers: updatedReviewers,
+        updated_at: new Date().toISOString()
       });
-
-      // Update local state to reflect the change
+      
+      // Update local state
       setProtocols(prevProtocols => 
-        prevProtocols.map(protocol => {
-          if (protocol.id === reassignmentData.protocolId) {
-            // Handle protocols with reviewers array
-            if (protocol.reviewers && protocol.reviewers.length > 0) {
-              const updatedReviewers = protocol.reviewers.map(reviewer => {
-                if (reviewer.id === reassignmentData.reviewerId) {
-                  const newReviewer = reviewerList.find(r => r.id === newReviewerId);
-                  return {
-                    ...reviewer,
-                    id: newReviewerId,
-                    name: newReviewer?.name || newReviewerId,
-                    status: 'In Progress'
-                  };
-                }
-                return reviewer;
-              });
-              
-              return {
-                ...protocol,
-                reviewers: updatedReviewers,
-                status: updatedReviewers.some(r => r.status === 'Completed') ? 'Partially Completed' : 'In Progress'
-              };
-            } 
-            // Handle single reviewer field
-            else if (protocol.reviewer === reassignmentData.reviewerId) {
-              return {
-                ...protocol,
-                reviewer: newReviewerId,
-                status: 'In Progress'
-              };
-            }
+        prevProtocols.map(p => {
+          if (p.id === protocolId) {
+            return {
+              ...p,
+              reviewers: updatedReviewers
+            };
           }
-          return protocol;
+          return p;
         })
       );
-
-      showNotification(
-        'success', 
-        'Reassignment Successful', 
-        `Protocol "${reassignmentData.protocolName}" has been reassigned from ${reassignmentData.reviewerName} to ${reviewerList.find(r => r.id === newReviewerId)?.name || newReviewerId}.`
-      );
       
+      // Show success message
+      showNotification('success', 'Success', `Reviewer reassigned successfully with due date: ${formatDate(dueDateToUse)}`);
+      
+      // Close the modal
       setReassignModalOpen(false);
+      setReassignmentData(null);
     } catch (error) {
-      console.error('Error reassigning protocol:', error);
-      showNotification('error', 'Reassignment Failed', `An error occurred: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      console.error('Error reassigning reviewer:', error);
+      showNotification('error', 'Error', `Failed to reassign reviewer: ${error instanceof Error ? error.message : 'Unknown error'}`);
     } finally {
-      setReassignmentData(prev => prev ? { ...prev, loading: false } : null);
+      if (reassignmentData) {
+        setReassignmentData({
+          ...reassignmentData,
+          loading: false
+        });
+      }
     }
   };
 
@@ -360,16 +586,35 @@ export default function DueDateMonitorPage() {
       
       // Process each selected protocol
       for (const protocolId of selectedProtocols) {
-        // Get the protocol document
-        const protocolRef = doc(db, 'protocols', protocolId);
-        const protocolSnap = await getDoc(protocolRef);
+        const protocol = protocols.find(p => p.id === protocolId);
         
-        if (!protocolSnap.exists()) {
+        if (!protocol) continue;
+        
+        // Get the document reference using the protocol path
+        let protocolRef;
+        if (protocol._path) {
+          const pathParts = protocol._path.split('/');
+          if (pathParts.length === 3) {
+            const [month, week, id] = pathParts;
+            protocolRef = doc(db, 'protocols', month, week, id);
+          } else {
+            console.error(`Invalid path format for protocol: ${protocol.id}`);
+            continue; // Skip this protocol and continue with others
+          }
+        } else {
+          console.error(`Missing path information for protocol: ${protocol.id}`);
+          continue; // Skip protocols without path information
+        }
+        
+        // Get the current protocol data
+        const protocolDoc = await getDoc(protocolRef);
+        
+        if (!protocolDoc.exists()) {
           console.error(`Protocol ${protocolId} not found`);
           continue;
         }
         
-        const protocolData = protocolSnap.data() as Protocol;
+        const protocolData = protocolDoc.data() as Protocol;
         
         // Find the new reviewer details
         const newReviewer = reviewerList.find(r => r.id === newReviewerId);
@@ -396,7 +641,7 @@ export default function DueDateMonitorPage() {
             return reviewer;
           });
         } else if (protocolData.reviewer) {
-          // Handle single reviewer case
+          // Handle single reviewer case - convert to reviewers array
           updatedReviewers = [{
             id: newReviewerId,
             name: newReviewer.name,
@@ -627,6 +872,9 @@ export default function DueDateMonitorPage() {
                     )}
                   </th>
                   <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    SPUP REC Code
+                  </th>
+                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Protocol Name
                   </th>
                   <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -659,16 +907,19 @@ export default function DueDateMonitorPage() {
                         )}
                       </td>
                       <td className="px-6 py-4">
-                        <div className="text-sm font-medium text-gray-900">{protocol.protocol_name}</div>
+                        <div className="text-sm font-medium text-gray-900">{protocol.spup_rec_code || protocol.id}</div>
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="text-sm font-medium text-gray-900">{protocol.protocol_name || protocol.research_title}</div>
                       </td>
                       <td className="px-6 py-4">
                         <div className="text-sm text-gray-500">{protocol.release_period}</div>
                       </td>
                       <td className="px-6 py-4">
-                        <div className="text-sm text-gray-500">{formatDate(protocol.due_date)}</div>
+                        <div className="text-sm text-gray-500">{formatDate(getLatestDueDate(protocol))}</div>
                       </td>
                       <td className="px-6 py-4">
-                        {getStatusLabel(protocol.status, protocol.due_date)}
+                        {getStatusLabel(protocol.status, getLatestDueDate(protocol))}
                       </td>
                       <td className="px-6 py-4 text-right text-sm font-medium">
                         <button
