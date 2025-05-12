@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { collection, getDocs, doc, updateDoc, Timestamp, runTransaction, query, collectionGroup, getDoc } from 'firebase/firestore';
+import { collection, getDocs, doc, updateDoc, Timestamp, runTransaction, query, collectionGroup, getDoc, deleteField } from 'firebase/firestore';
 import { db } from '@/lib/firebaseconfig';
 import Link from 'next/link';
 import { isOverdue, isDueSoon, formatDate, getFormTypeName } from '@/lib/utils';
@@ -47,6 +47,7 @@ export default function ReviewerDashboard() {
   const [reviewerName, setReviewerName] = useState<string | null>(null);
   const [selectedReleasePeriod, setSelectedReleasePeriod] = useState<string>('all');
   const [releasePeriods, setReleasePeriods] = useState<string[]>([]);
+  const [loadingProtocols, setLoadingProtocols] = useState<Record<string, boolean>>({});
   const [statusCounts, setStatusCounts] = useState({
     total: 0,
     completed: 0,
@@ -59,12 +60,6 @@ export default function ReviewerDashboard() {
     protocols: Protocol[];
     releasePeriod: string;
     protocolCount: number;
-  } | null>(null);
-  const [notificationModal, setNotificationModal] = useState<{
-    isOpen: boolean;
-    title: string;
-    message: string;
-    type: 'success' | 'error' | 'info' | 'warning';
   } | null>(null);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   
@@ -567,30 +562,16 @@ export default function ReviewerDashboard() {
     return weightB - weightA;
   });
   
-  // Function to show notification modal
+  // Function to show notification modal - now just logs to console
   const showNotification = (title: string, message: string, type: 'success' | 'error' | 'info' | 'warning') => {
-    setNotificationModal({
-      isOpen: true,
-      title,
-      message,
-      type
-    });
+    console.log(`${type.toUpperCase()}: ${title} - ${message}`);
   };
 
-  // Function to close notification modal
-  const closeNotificationModal = () => {
-    setNotificationModal(null);
-  };
-
-  // Update the markAllProtocolsAsCompleted function to use the notification modal instead of alerts
+  // Remove notification modal related code
   const markAllProtocolsAsCompleted = async (protocols: Protocol[]) => {
     try {
       if (!reviewerId || !reviewerName) {
-        showNotification(
-          "Authentication Error", 
-          "Reviewer information is missing. Please try logging in again.", 
-          "error"
-        );
+        console.error("Authentication Error - Reviewer information is missing. Please try logging in again.");
         return;
       }
 
@@ -609,9 +590,12 @@ export default function ReviewerDashboard() {
       const protocolsToUpdate = protocols.filter(protocol => {
         if (protocol.reviewers && Array.isArray(protocol.reviewers)) {
           const thisReviewer = protocol.reviewers.find(r => 
-            r.id === reviewerId || r.name === reviewerName ||
-            (r.name && reviewerName && (r.name.toLowerCase().includes(reviewerName.toLowerCase()) || 
-                                       reviewerName.toLowerCase().includes(r.name.toLowerCase()))))
+            r.id === reviewerId || 
+            r.name === reviewerName ||
+            (r.name && reviewerName && (
+              r.name.toLowerCase().includes(reviewerName.toLowerCase()) || 
+              reviewerName.toLowerCase().includes(r.name.toLowerCase())
+            ))
           );
           return !thisReviewer || thisReviewer.status !== 'Completed';
         }
@@ -622,11 +606,7 @@ export default function ReviewerDashboard() {
       
       if (protocolsToUpdate.length === 0) {
         document.body.removeChild(loadingMessage);
-        showNotification(
-          "Already Completed", 
-          "All selected protocols are already marked as completed.", 
-          "info"
-        );
+        console.log("Already Completed - All selected protocols are already marked as completed.");
         return;
       }
       
@@ -731,12 +711,7 @@ export default function ReviewerDashboard() {
       // Remove loading indicator
       document.body.removeChild(loadingMessage);
       
-      // Show success message
-      showNotification(
-        "Protocols Completed", 
-        `Successfully marked ${protocolsToUpdate.length} protocols as completed!`, 
-        "success"
-      );
+      console.log(`Successfully marked ${protocolsToUpdate.length} protocols as completed!`);
       
       // Update the local state instead of reloading the page
       // This will immediately update the UI without waiting for a page refresh
@@ -785,12 +760,7 @@ export default function ReviewerDashboard() {
         loadingMessage.parentNode.removeChild(loadingMessage);
       }
       
-      // Show detailed error
-      showNotification(
-        "Error", 
-        `Failed to mark protocols as completed: ${err instanceof Error ? err.message : 'Unknown error'}`, 
-        "error"
-      );
+      console.error(`Failed to mark protocols as completed: ${err instanceof Error ? err.message : 'Unknown error'}`);
     }
   };
 
@@ -931,19 +901,21 @@ export default function ReviewerDashboard() {
   const markProtocolAsInProgress = async (protocol: Protocol) => {
     try {
       if (!reviewerId || !reviewerName) {
-        showNotification(
-          "Authentication Error", 
-          "Reviewer information is missing. Please try logging in again.", 
-          "error"
-        );
+        console.error("Authentication Error - Reviewer information is missing. Please try logging in again.");
         return;
       }
+      
+      // Set loading state for this protocol
+      setLoadingProtocols(prev => ({ ...prev, [protocol.id]: true }));
       
       // Get protocol reference using helper
       const protocolRef = getProtocolRef(protocol);
       
-      // Prepare the updates
-      const updates: any = { completed_at: null };
+      // Prepare the updates - use deleteField() for Firestore
+      const updates: any = {
+        // Use deleteField() to properly remove the field from Firestore
+        completed_at: deleteField()
+      };
       
       // Update the protocol
       console.log(`Marking protocol ${protocol.id} as in progress`);
@@ -951,7 +923,8 @@ export default function ReviewerDashboard() {
       // Check if the reviewers array exists and update the specific reviewer's status
       const protocolSnap = await getDoc(protocolRef);
       if (!protocolSnap.exists()) {
-        showNotification("Error", "Protocol not found.", "error");
+        console.error("Error - Protocol not found.");
+        setLoadingProtocols(prev => ({ ...prev, [protocol.id]: false }));
         return;
       }
       
@@ -967,7 +940,13 @@ export default function ReviewerDashboard() {
         );
         
         if (reviewerIndex !== -1) {
-          updatedReviewers[reviewerIndex].status = 'In Progress';
+          // Create a new reviewer object without completed_at
+          const updatedReviewer = { ...updatedReviewers[reviewerIndex], status: 'In Progress' };
+          // Remove completed_at if it exists
+          if ('completed_at' in updatedReviewer) {
+            delete updatedReviewer.completed_at;
+          }
+          updatedReviewers[reviewerIndex] = updatedReviewer;
           updates.reviewers = updatedReviewers;
         } else {
           // Reviewer not found in array, add them
@@ -1000,35 +979,89 @@ export default function ReviewerDashboard() {
       await updateDoc(protocolRef, updates);
       console.log(`Protocol ${protocol.id} marked as in progress`);
       
-      // Refresh the protocols list
-      window.location.reload();
+      // Update the local state
+      setProtocols(prevProtocols => {
+        return prevProtocols.map(p => {
+          if (p.id !== protocol.id) return p;
+          
+          // Create a new protocol object with updated status
+          const updatedProtocol = { ...p };
+          
+          // Update reviewers array if it exists
+          if (updatedProtocol.reviewers && Array.isArray(updatedProtocol.reviewers)) {
+            updatedProtocol.reviewers = updatedProtocol.reviewers.map(r => {
+              if (r.id === reviewerId || r.name === reviewerName || r.name === reviewerId) {
+                // Create new reviewer object without completed_at
+                const updatedReviewer = { ...r, status: 'In Progress' };
+                // Remove completed_at if it exists
+                if ('completed_at' in updatedReviewer) {
+                  delete updatedReviewer.completed_at;
+                }
+                return updatedReviewer;
+              }
+              return r;
+            });
+            
+            // If no matching reviewer found, add current reviewer
+            if (!updatedProtocol.reviewers.some(r => 
+                r.id === reviewerId || r.name === reviewerName || r.name === reviewerId)) {
+              updatedProtocol.reviewers.push({
+                id: reviewerId,
+                name: reviewerName,
+                status: 'In Progress',
+                document_type: protocol.document_type,
+                form_type: protocol.document_type
+              });
+            }
+          } else {
+            // For old structure
+            updatedProtocol.status = 'In Progress';
+            updatedProtocol.reviewers = [{
+              id: reviewerId,
+              name: reviewerName,
+              status: 'In Progress',
+              document_type: protocol.document_type,
+              form_type: protocol.document_type
+            }];
+          }
+          
+          // Remove completed_at from protocol if it exists
+          if ('completed_at' in updatedProtocol) {
+            delete updatedProtocol.completed_at;
+          }
+          
+          return updatedProtocol;
+        });
+      });
       
-      // Show success notification
-      showNotification(
-        "Success", 
-        "Protocol marked as in progress.", 
-        "success"
-      );
+      // Update status counts
+      setStatusCounts(prev => {
+        return {
+          ...prev,
+          completed: Math.max(0, prev.completed - 1),
+          inProgress: prev.inProgress + 1
+        };
+      });
+      
+      console.log("Success - Protocol marked as in progress.");
     } catch (err) {
       console.error("Error marking protocol as in progress:", err);
-      showNotification(
-        "Error", 
-        `Failed to mark protocol as in progress: ${err instanceof Error ? err.message : 'Unknown error'}`, 
-        "error"
-      );
+      console.error(`Failed to mark protocol as in progress: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      // Clear loading state for this protocol
+      setLoadingProtocols(prev => ({ ...prev, [protocol.id]: false }));
     }
   };
   
   const markProtocolAsCompleted = async (protocol: Protocol) => {
     try {
       if (!reviewerId || !reviewerName) {
-        showNotification(
-          "Authentication Error", 
-          "Reviewer information is missing. Please try logging in again.", 
-          "error"
-        );
+        console.error("Authentication Error - Reviewer information is missing. Please try logging in again.");
         return;
       }
+      
+      // Set loading state for this protocol
+      setLoadingProtocols(prev => ({ ...prev, [protocol.id]: true }));
       
       // Get protocol reference using helper
       const protocolRef = getProtocolRef(protocol);
@@ -1043,7 +1076,8 @@ export default function ReviewerDashboard() {
       // Check if the reviewers array exists and update the specific reviewer's status
       const protocolSnap = await getDoc(protocolRef);
       if (!protocolSnap.exists()) {
-        showNotification("Error", "Protocol not found.", "error");
+        console.error("Error - Protocol not found.");
+        setLoadingProtocols(prev => ({ ...prev, [protocol.id]: false }));
         return;
       }
       
@@ -1107,22 +1141,77 @@ export default function ReviewerDashboard() {
       await updateDoc(protocolRef, updates);
       console.log(`Protocol ${protocol.id} marked as completed`);
       
-      // Refresh the protocols list
-      window.location.reload();
+      // Update the local state
+      setProtocols(prevProtocols => {
+        return prevProtocols.map(p => {
+          if (p.id !== protocol.id) return p;
+          
+          // Create a new protocol object with updated status
+          const updatedProtocol = { ...p };
+          
+          // Update reviewers array if it exists
+          if (updatedProtocol.reviewers && Array.isArray(updatedProtocol.reviewers)) {
+            updatedProtocol.reviewers = updatedProtocol.reviewers.map(r => {
+              if (r.id === reviewerId || r.name === reviewerName || r.name === reviewerId) {
+                return { ...r, status: 'Completed', completed_at: completedDate };
+              }
+              return r;
+            });
+            
+            // If no matching reviewer found, add current reviewer
+            if (!updatedProtocol.reviewers.some(r => 
+                r.id === reviewerId || r.name === reviewerName || r.name === reviewerId)) {
+              updatedProtocol.reviewers.push({
+                id: reviewerId,
+                name: reviewerName,
+                status: 'Completed',
+                document_type: protocol.document_type,
+                form_type: protocol.document_type,
+                completed_at: completedDate
+              });
+            }
+            
+            // Check if all reviewers are completed
+            if (updatedProtocol.reviewers.every(r => r.status === 'Completed')) {
+              updatedProtocol.status = 'Completed';
+            }
+          } else {
+            // For old structure
+            updatedProtocol.status = 'Completed';
+            updatedProtocol.reviewers = [{
+              id: reviewerId,
+              name: reviewerName,
+              status: 'Completed',
+              document_type: protocol.document_type,
+              form_type: protocol.document_type,
+              completed_at: completedDate
+            }];
+          }
+          
+          return updatedProtocol;
+        });
+      });
       
-      // Show success notification
-      showNotification(
-        "Success", 
-        "Protocol marked as completed.", 
-        "success"
-      );
+      // Update status counts
+      setStatusCounts(prev => {
+        // One more completed, one fewer in progress
+        return {
+          ...prev,
+          completed: prev.completed + 1,
+          inProgress: Math.max(0, prev.inProgress - 1),
+          // Update overdue and due soon if applicable
+          overdue: isOverdue(protocol.due_date) ? Math.max(0, prev.overdue - 1) : prev.overdue,
+          dueSoon: isDueSoon(protocol.due_date) ? Math.max(0, prev.dueSoon - 1) : prev.dueSoon
+        };
+      });
+      
+      console.log("Success - Protocol marked as completed.");
     } catch (err) {
       console.error("Error marking protocol as completed:", err);
-      showNotification(
-        "Error", 
-        `Failed to mark protocol as completed: ${err instanceof Error ? err.message : 'Unknown error'}`, 
-        "error"
-      );
+      console.error(`Failed to mark protocol as completed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    } finally {
+      // Clear loading state for this protocol
+      setLoadingProtocols(prev => ({ ...prev, [protocol.id]: false }));
     }
   };
 
@@ -1444,16 +1533,38 @@ export default function ReviewerDashboard() {
                                 {isCompleted ? (
                                   <button
                                     onClick={() => markProtocolAsInProgress(protocol)}
-                                    className="inline-flex items-center justify-center px-3 py-1 border border-transparent text-xs font-medium rounded shadow-sm text-white bg-yellow-600 hover:bg-yellow-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-yellow-500"
+                                    disabled={loadingProtocols[protocol.id]}
+                                    className="inline-flex items-center justify-center px-3 py-1 border border-transparent text-xs font-medium rounded shadow-sm text-white bg-yellow-600 hover:bg-yellow-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-yellow-500 disabled:opacity-50 disabled:cursor-not-allowed"
                                   >
-                                    Mark In Progress
+                                    {loadingProtocols[protocol.id] ? (
+                                      <>
+                                        <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                        </svg>
+                                        Processing...
+                                      </>
+                                    ) : (
+                                      'Mark In Progress'
+                                    )}
                                   </button>
                                 ) : (
                                   <button
                                     onClick={() => markProtocolAsCompleted(protocol)}
-                                    className="inline-flex items-center justify-center px-3 py-1 border border-transparent text-xs font-medium rounded shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
+                                    disabled={loadingProtocols[protocol.id]}
+                                    className="inline-flex items-center justify-center px-3 py-1 border border-transparent text-xs font-medium rounded shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:opacity-50 disabled:cursor-not-allowed"
                                   >
-                                    Mark Completed
+                                    {loadingProtocols[protocol.id] ? (
+                                      <>
+                                        <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                        </svg>
+                                        Processing...
+                                      </>
+                                    ) : (
+                                      'Mark Completed'
+                                    )}
                                   </button>
                                 )}
                 </div>
@@ -1495,48 +1606,7 @@ export default function ReviewerDashboard() {
       )}
           
           {/* Notification Modal */}
-          {notificationModal && (
-            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-              <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
-                <div className="flex items-start mb-4">
-                  <div className="flex-shrink-0">
-              {notificationModal.type === 'success' && (
-                      <svg className="h-6 w-6 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
-                </svg>
-              )}
-              {notificationModal.type === 'error' && (
-                      <svg className="h-6 w-6 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              )}
-              {notificationModal.type === 'warning' && (
-                      <svg className="h-6 w-6 text-yellow-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                </svg>
-              )}
-              {notificationModal.type === 'info' && (
-                      <svg className="h-6 w-6 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-              )}
-            </div>
-                  <div className="ml-3">
-                    <h3 className="text-lg font-medium text-gray-900">{notificationModal.title}</h3>
-                    <p className="mt-1 text-sm text-gray-500">{notificationModal.message}</p>
-                  </div>
-                </div>
-            <div className="flex justify-end">
-              <button
-                onClick={closeNotificationModal}
-                    className="inline-flex justify-center px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-                  >
-                    Close
-              </button>
-            </div>
-          </div>
-        </div>
-          )}
+          {/* Notification Modal has been removed as per instructions */}
         </>
       )}
     </div>

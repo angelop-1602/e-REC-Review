@@ -360,8 +360,6 @@ export default function AdminDashboard() {
             status: overallStatus,
             reviewerCount,
             completedReviewerCount,
-            // Add related protocols for reference
-            relatedProtocols: items
           };
         });
         

@@ -174,33 +174,7 @@ export default function ProtocolDetailsModal({
           </div>
         </div>
 
-        {/* Related Protocols */}
-        {protocol.relatedProtocols && protocol.relatedProtocols.length > 0 && (
-          <div>
-            <h4 className="text-sm font-medium text-gray-500 mb-1">Related Protocols</h4>
-            <div className="bg-gray-50 p-4 rounded-md">
-              <ul className="divide-y divide-gray-200">
-                {protocol.relatedProtocols.map((related, index) => (
-                  <li key={index} className="py-2">
-                    <div className="flex justify-between items-center">
-                      <div>
-                        <p className="text-sm font-medium">{related.protocol_name}</p>
-                        <p className="text-xs text-gray-500">
-                          {related.reviewer || (related.reviewers && related.reviewers.length > 0 
-                            ? related.reviewers[0].name 
-                            : 'No reviewer'
-                          )}
-                          {related.document_type && ` - ${getFormTypeName(related.document_type)}`}
-                        </p>
-                      </div>
-                      <div>{getStatusBadge(related.status, related.due_date)}</div>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          </div>
-        )}
+       
 
         <div className="mt-6 flex justify-end">
           <button
