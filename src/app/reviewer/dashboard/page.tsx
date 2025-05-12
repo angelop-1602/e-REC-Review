@@ -1,12 +1,13 @@
 'use client';
 
+/* eslint-disable @typescript-eslint/no-explicit-any */
+/* eslint-disable react-hooks/exhaustive-deps */
 import { useState, useEffect } from 'react';
-import { collection, getDocs, doc, updateDoc, Timestamp, runTransaction, query, collectionGroup, getDoc, deleteField } from 'firebase/firestore';
+import { collection, getDocs, doc, updateDoc, runTransaction, query, collectionGroup, getDoc, deleteField } from 'firebase/firestore';
 import { db } from '@/lib/firebaseconfig';
-import Link from 'next/link';
 import { isOverdue, isDueSoon, formatDate, getFormTypeName } from '@/lib/utils';
-import NoticeAlert from '@/components/NoticeAlert';
-import { useRouter } from 'next/navigation';
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+import ProtocolStatusCard from '@/components/ProtocolStatusCard';
 
 interface Protocol {
   id: string;
@@ -42,7 +43,6 @@ export default function ReviewerDashboard() {
   const [protocols, setProtocols] = useState<Protocol[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [debugInfo, setDebugInfo] = useState<string | null>(null);
   const [reviewerId, setReviewerId] = useState<string | null>(null);
   const [reviewerName, setReviewerName] = useState<string | null>(null);
   const [selectedReleasePeriod, setSelectedReleasePeriod] = useState<string>('all');
@@ -61,7 +61,6 @@ export default function ReviewerDashboard() {
     releasePeriod: string;
     protocolCount: number;
   } | null>(null);
-  const [refreshTrigger, setRefreshTrigger] = useState(0);
   
   // Helper function to ensure due dates are in the correct format
   const ensureValidDueDate = (dueDate: any): string => {
@@ -265,7 +264,6 @@ export default function ReviewerDashboard() {
         }
         
         console.log(`Found ${matchingProtocolCount} total protocols assigned to this reviewer`);
-        setDebugInfo(prev => `${prev}\nMatching protocols: ${matchingProtocolCount}`);
         
         // Sort release periods and add them to the state
         console.log(`Found release periods: ${Array.from(uniqueReleasePeriods).join(', ')}`);

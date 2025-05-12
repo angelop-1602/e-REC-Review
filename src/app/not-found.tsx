@@ -38,7 +38,7 @@ export default function NotFound() {
       <main className="flex-grow flex items-center justify-center p-4">
         <div className="text-center">
           <h1 className="text-4xl font-bold text-gray-800 mb-4">Page Not Found</h1>
-          <p className="text-gray-600 mb-6">The page you are looking for might be loading or doesn't exist.</p>
+          <p className="text-gray-600 mb-6">The page you are looking for might be loading or doesn&apos;t exist.</p>
           <Link 
             href="/"
             className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"

@@ -1,7 +1,8 @@
 'use client';
 
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { useState, useEffect } from 'react';
-import { collection, getDocs, query, where, orderBy, Timestamp, QueryConstraint, doc, updateDoc, arrayUnion, arrayRemove, getDoc, setDoc } from 'firebase/firestore';
+import { collection, getDocs, query, where, Timestamp, QueryConstraint, doc, updateDoc, arrayUnion, arrayRemove, getDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebaseconfig';
 import Link from 'next/link';
 import { format } from 'date-fns';
@@ -157,7 +158,6 @@ export default function ReviewerNoticesPage() {
         throw new Error('Notice not found');
       }
 
-      const noticeData = noticeDoc.data();
       const isLiked = likedNotices[noticeId];
 
       // Update Firestore

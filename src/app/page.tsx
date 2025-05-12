@@ -5,11 +5,6 @@ import { collection, getDocs, query, DocumentData } from 'firebase/firestore';
 import { db } from '@/lib/firebaseconfig';
 import { useRouter } from 'next/navigation';
 
-interface Reviewer {
-  id: string;
-  name: string;
-}
-
 interface Protocol {
   protocol_name: string;
   reviewer: string; // For backward compatibility

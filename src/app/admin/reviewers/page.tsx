@@ -1,9 +1,8 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { collection, getDocs, doc, writeBatch, addDoc, deleteDoc, updateDoc, query, orderBy } from 'firebase/firestore';
+import { collection, getDocs, doc, writeBatch, deleteDoc, updateDoc, query, orderBy } from 'firebase/firestore';
 import { db } from '@/lib/firebaseconfig';
-import Link from 'next/link';
 
 interface Reviewer {
   id: string;

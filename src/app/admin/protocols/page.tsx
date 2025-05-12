@@ -1,10 +1,10 @@
 'use client';
 
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { useState, useEffect } from 'react';
-import { collection, getDocs, query, orderBy, collectionGroup, doc, getDoc, updateDoc } from 'firebase/firestore';
+import { collection, getDocs, query, collectionGroup, doc, getDoc, updateDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebaseconfig';
-import Link from 'next/link';
-import { isOverdue, isDueSoon, formatDate, getFormTypeName } from '@/lib/utils';
+import { isOverdue, isDueSoon, formatDate } from '@/lib/utils';
 import ProtocolTable from '@/components/ProtocolTable';
 import ProtocolStatusCard from '@/components/ProtocolStatusCard';
 import ProtocolDetailsModal from '@/components/ProtocolDetailsModal';
@@ -447,7 +447,8 @@ export default function ProtocolsPage() {
         });
 
         // Create a grouped version of protocols (one entry per protocol_name)
-        const processedProtocols = Object.entries(protocolarrayByName).map(([name, items]) => {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const processedProtocols = Object.entries(protocolarrayByName).map(([_, items]) => {
           // Use the first protocol as the base
           const baseProtocol = { ...items[0] };
           

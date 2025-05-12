@@ -4,7 +4,6 @@ import { useState, useRef } from 'react';
 import { setDoc, doc, collection } from 'firebase/firestore';
 import { db } from '@/lib/firebaseconfig';
 import Papa from 'papaparse';
-import Link from 'next/link';
 import NotificationModal from '@/components/NotificationModal';
 
 // Interface for the CSV row data
@@ -38,7 +37,6 @@ interface Protocol {
 }
 
 export default function TestPage() {
-  const [file, setFile] = useState<File | null>(null);
   const [parsedData, setParsedData] = useState<CSVRow[]>([]);
   const [processedData, setProcessedData] = useState<Protocol[]>([]);
   const [loading, setLoading] = useState(false);
@@ -116,7 +114,6 @@ export default function TestPage() {
     const selectedFile = e.target.files?.[0];
     if (!selectedFile) return;
 
-    setFile(selectedFile);
     setParsedData([]);
     setProcessedData([]);
     setUploadStatus('');
@@ -256,7 +253,6 @@ export default function TestPage() {
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
       }
-      setFile(null);
       setParsedData([]);
       setProcessedData([]);
     } catch (error) {

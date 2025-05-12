@@ -1,9 +1,9 @@
 'use client';
 
 import { useState, ChangeEvent } from 'react';
-import { collection, doc, writeBatch, setDoc } from 'firebase/firestore';
+import { doc, setDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebaseconfig';
-import { getFormTypeName, processReleaseInfo } from '@/lib/utils';
+import { getFormTypeName } from '@/lib/utils';
 
 // CSV Parser function
 const parseCSV = (csvText: string) => {
@@ -268,8 +268,6 @@ export default function CSVUploadPage() {
     setSuccess(null);
     
     try {
-      const batch = writeBatch(db);
-      
       // Track which protocols have been processed
       const protocolsProcessed = new Set();
       
@@ -442,7 +440,7 @@ export default function CSVUploadPage() {
         <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200 overflow-x-auto">
           <h2 className="text-lg font-medium mb-2">Mapped Data Preview</h2>
           <p className="text-sm text-gray-500 mb-4">
-            Review this data before uploading to Firebase. We've mapped your CSV to our protocol structure.
+            Review this data before uploading to Firebase. We&apos;ve mapped your CSV to our protocol structure.
           </p>
           
           <table className="min-w-full divide-y divide-gray-200">

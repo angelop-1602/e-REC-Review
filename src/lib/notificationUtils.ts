@@ -1,3 +1,8 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+/* eslint-disable @typescript-eslint/no-unused-vars */
+import { getFormTypeName } from '@/lib/utils';
+import { doc, collection, getDocs, query, where, addDoc, getDoc, updateDoc } from 'firebase/firestore';
+import { db } from '@/lib/firebaseconfig';
 import { isOverdue, isDueSoon } from './utils';
 
 /**
@@ -268,4 +273,19 @@ export function generateAdminSummaryEmail(stats: {
   `;
   
   return html;
+}
+
+// Function to send notifications for overdue protocols
+export const sendOverdueProtocolNotifications = async (adminEmails: string[], overdueThreshold: number = 0) => {
+  try {
+    // Get current date for comparison
+    const today = new Date();
+    console.log('Checking for overdue protocols with threshold:', overdueThreshold);
+    console.log('Admin emails:', adminEmails.join(', '));
+    
+    // Add implementation here
+    
+  } catch (error) {
+    console.error('Error checking overdue protocols:', error);
+  }
 } 

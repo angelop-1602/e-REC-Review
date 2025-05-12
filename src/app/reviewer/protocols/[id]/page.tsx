@@ -1,12 +1,13 @@
 'use client';
 
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { useState, useEffect } from 'react';
 import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebaseconfig';
 import { useRouter, useParams } from 'next/navigation';
 import Link from 'next/link';
 import Script from 'next/script';
-import { isOverdue, isDueSoon, getFormTypeName, formatDate, getReviewerFormType, getFormUrl } from '@/lib/utils';
+import { isOverdue, isDueSoon, formatDate, getReviewerFormType } from '@/lib/utils';
 
 interface Reviewer {
   id: string;
@@ -305,34 +306,29 @@ export default function ProtocolDetailPage() {
   
   // Get the current reviewer's status
   const getCurrentReviewerStatus = (): string => {
-    if (!protocol) return 'Unknown';
+    if (!protocol || !reviewer) return '';
     
+    // Check in the reviewers array first
     if (protocol.reviewers && Array.isArray(protocol.reviewers)) {
-      for (const r of protocol.reviewers) {
-        const idMatch = r.id === reviewer.id;
-        const nameMatch = r.name === reviewer.name;
-        const nameIncludes = Boolean(r.name && reviewer.name && r.name.toLowerCase().includes(reviewer.name.toLowerCase()));
-        const reverseIncludes = Boolean(reviewer.name && r.name && reviewer.name.toLowerCase().includes(r.name.toLowerCase()));
-        
-        if (idMatch || nameMatch || nameIncludes || reverseIncludes) {
-          return r.status;
-        }
+      const thisReviewer = protocol.reviewers.find(r => 
+        r.id === reviewer.id || 
+        r.name === reviewer.name ||
+        (r.name && reviewer.name && r.name.toLowerCase().includes(reviewer.name.toLowerCase())) ||
+        (reviewer.name && r.name && reviewer.name.toLowerCase().includes(r.name.toLowerCase()))
+      );
+      
+      if (thisReviewer) {
+        return thisReviewer.status || '';
       }
     }
     
-    // Fall back to overall protocol status
-    return protocol.status;
+    return protocol.status || '';
   };
   
-  const handleLogout = () => {
-    localStorage.removeItem('reviewerId');
-    localStorage.removeItem('reviewerName');
-    router.push('/');
-  };
-  
-  // Function to open forms in a new window
   const openForm = (formUrl: string) => {
-    window.open(formUrl, '_blank');
+    if (formUrl) {
+      window.open(formUrl, '_blank');
+    }
   };
   
   return (

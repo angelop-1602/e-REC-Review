@@ -1,5 +1,5 @@
 import React from 'react';
-import { isOverdue, isDueSoon, formatDate, getFormTypeName } from '@/lib/utils';
+import { isOverdue, isDueSoon, formatDate } from '@/lib/utils';
 
 interface Reviewer {
   id: string;

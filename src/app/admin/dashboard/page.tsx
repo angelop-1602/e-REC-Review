@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { collection, getDocs, query, orderBy, limit, collectionGroup } from 'firebase/firestore';
+import { collection, getDocs, query, collectionGroup } from 'firebase/firestore';
 import { db } from '@/lib/firebaseconfig';
 import Link from 'next/link';
 import { isOverdue, isDueSoon, formatDate } from '@/lib/utils';
@@ -56,7 +56,7 @@ interface Protocol {
 export default function AdminDashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [overdueProtocols, setOverdueProtocols] = useState<Protocol[]>([]);
+  const [, setOverdueProtocols] = useState<Protocol[]>([]);
   const [upcomingDueProtocols, setUpcomingDueProtocols] = useState<Protocol[]>([]);
   const [recentProtocols, setRecentProtocols] = useState<Protocol[]>([]);
   const [overdueReviewers, setOverdueReviewers] = useState<{
@@ -67,7 +67,7 @@ export default function AdminDashboard() {
     dueDate: string;
     protocolPath?: string;
   }[]>([]);
-  const [reviewerStats, setReviewerStats] = useState<{
+  const [, setReviewerStats] = useState<{
     reviewerId: string;
     name: string;
     assigned: number;
@@ -101,7 +101,7 @@ export default function AdminDashboard() {
   });
   
   // Helper function to ensure due dates are in the correct format
-  const ensureValidDueDate = (dueDate: any): string => {
+  const ensureValidDueDate = (dueDate: string | Date | { toDate(): Date } | undefined): string => {
     if (!dueDate) return '';
     
     // If it's already a string in YYYY-MM-DD format, return it
@@ -110,7 +110,7 @@ export default function AdminDashboard() {
     }
     
     // If it's a timestamp object from Firestore
-    if (dueDate && typeof dueDate === 'object' && dueDate.toDate) {
+    if (dueDate && typeof dueDate === 'object' && 'toDate' in dueDate) {
       try {
         const date = dueDate.toDate();
         return date.toISOString().split('T')[0]; // Get YYYY-MM-DD part
@@ -324,7 +324,8 @@ export default function AdminDashboard() {
         }, {} as Record<string, Protocol[]>);
         
         // Create a grouped version of protocols (one entry per protocol_name)
-        const groupedProtocols = Object.entries(protocolGroups).map(([name, items]) => {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const groupedProtocols = Object.entries(protocolGroups).map(([_, items]) => {
           // Use the first protocol as the base
           const baseProtocol = { ...items[0] };
           
@@ -873,7 +874,7 @@ export default function AdminDashboard() {
                                 return formatDate(new Date(protocol.created_at).toISOString().split('T')[0]);
                               }
                               return 'Unknown date';
-                            } catch (e) {
+                            } catch {
                               return 'Unknown date';
                             }
                           })()} · {protocol.release_period}
