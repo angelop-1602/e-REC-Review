@@ -108,15 +108,19 @@ export function getFormTypeName(documentType: string): string {
   const normalizedType = documentType.replace(/\s*FORM$/i, '').trim();
   
   const formTypes: Record<string, string> = {
-    'CFEFR': 'Continuing Full Ethics Form Review',
-    'Form 04A CERF': 'Continuing Ethics Review Form',
+    'CFEFR': 'Checklist for Exemption from Review Form',
+    'Form 04A CERF': 'Checklist for Exemption from Review Form',
     'Form 06B1 PRA': 'Protocol Review Assessment Form',
-    'Form 06B2 PRA-EX': 'Protocol Review Assessment-Exemption Form',
+    'Form 06B2 PRA-EX': 'Protocol Review Assessment for Experimental Form',
     'Form 06C ICA': 'Informed Consent Assessment Form',
     'PRA': 'Protocol Review Assessment Form',
-    'PRA-EX': 'Protocol Review Assessment-Exemption Form',
-    'PRA_EX': 'Protocol Review Assessment-Exemption Form',
-    'ICA': 'Informed Consent Assessment Form'
+    'PRA1': 'Protocol Review Assessment Form',
+    'PRA2': 'Protocol Review Assessment Form',
+    'PRA-EX': 'Protocol Review Assessment for Experimental Form',
+    'PRA_EX': 'Protocol Review Assessment for Experimental Form',
+    'ICA': 'Informed Consent Assessment Form',
+    'IACUC': 'Protocol Review Assessment for Experimental Form',
+    'IACUC2': 'Protocol Review Assessment for Experimental Form'
   };
   
   return formTypes[normalizedType] || documentType;

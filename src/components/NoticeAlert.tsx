@@ -16,36 +16,35 @@ export default function NoticeAlert({ userType }: NoticeAlertProps) {
   useEffect(() => {
     const fetchNoticeCount = async () => {
       try {
-        // Get current date for filtering out expired notices
         const currentDate = new Date();
         const sevenDaysAgo = new Date(currentDate.getTime() - 7 * 24 * 60 * 60 * 1000);
-
-        // Use a simpler query with only one where clause to avoid requiring composite index
-        const noticesQuery = query(
-          collection(db, 'notices'),
-          where('expires_at', '>', Timestamp.fromDate(currentDate))
-        );
-
+  
+        // Get all notices without filtering by expires_at
+        const noticesQuery = query(collection(db, 'notices'));
         const querySnapshot = await getDocs(noticesQuery);
-
-        // Filter on the client side for notices created in the last 7 days
+  
+        // Filter on client side
         const recentNotices = querySnapshot.docs.filter(doc => {
           const data = doc.data();
-          return data.created_at &&
-            data.created_at.toDate() > sevenDaysAgo;
+          const createdAt = data.created_at?.toDate?.();
+  
+          const notExpired = !data.expires_at || data.expires_at.toDate() > currentDate;
+          const recentlyCreated = createdAt && createdAt > sevenDaysAgo;
+  
+          return notExpired && recentlyCreated;
         });
-
+  
         setNoticeCount(recentNotices.length);
       } catch (err) {
         console.error('Error fetching notice count:', err);
-        // Just silently fail - no notice count will be shown
       } finally {
         setLoading(false);
       }
     };
-
+  
     fetchNoticeCount();
   }, []);
+  
 
   if (loading || noticeCount === 0) {
     return null;

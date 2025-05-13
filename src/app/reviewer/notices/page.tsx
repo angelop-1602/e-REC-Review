@@ -1,17 +1,19 @@
 'use client';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import React from 'react';
 import { useState, useEffect } from 'react';
 import { collection, getDocs, query, where, Timestamp, QueryConstraint, doc, updateDoc, arrayUnion, arrayRemove, getDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebaseconfig';
 import Link from 'next/link';
 import { format } from 'date-fns';
+import SystemNotice from '@/components/SystemNotice';
 
 interface Notice {
   id: string;
   title: string;
   content: string;
-  priority: 'low' | 'medium' | 'high';
+  priority: 'none' | 'low' | 'medium' | 'high';
   created_at: any;
   expires_at: any;
   likes?: string[]; // Array of reviewer IDs who liked this notice
@@ -25,6 +27,7 @@ export default function ReviewerNoticesPage() {
   const [reviewerId, setReviewerId] = useState<string | null>(null);
   const [likedNotices, setLikedNotices] = useState<Record<string, boolean>>({});
   const [likesLoading, setLikesLoading] = useState<Record<string, boolean>>({});
+  const [showMigrationNotice, setShowMigrationNotice] = useState(true);
 
   useEffect(() => {
     // Get reviewer ID from localStorage
@@ -40,25 +43,25 @@ export default function ReviewerNoticesPage() {
         // Get current date for filtering out expired notices
         const currentDate = new Date();
 
-        // Create a simpler query that doesn't require composite indexing
-        // Only filter by expiration date
-        const constraints: QueryConstraint[] = [
-          where('expires_at', '>', Timestamp.fromDate(currentDate))
-        ];
-
+        // Include both non-expired notices and notices with no expiration (null)
         const noticesQuery = query(
-          collection(db, 'notices'),
-          ...constraints
+          collection(db, 'notices')
         );
 
         const querySnapshot = await getDocs(noticesQuery);
 
         const fetchedNotices: Notice[] = [];
         querySnapshot.forEach((doc) => {
-          fetchedNotices.push({
-            id: doc.id,
-            ...doc.data()
-          } as Notice);
+          const noticeData = doc.data();
+          
+          // Add notice if it has no expiration date or if it hasn't expired yet
+          if (!noticeData.expires_at || 
+              (noticeData.expires_at && noticeData.expires_at.toDate() > currentDate)) {
+            fetchedNotices.push({
+              id: doc.id,
+              ...noticeData
+            } as Notice);
+          }
         });
 
         // Sort notices client-side instead of in the query
@@ -66,7 +69,7 @@ export default function ReviewerNoticesPage() {
         // Then by expiration date (ascending)
         const sortedNotices = fetchedNotices.sort((a, b) => {
           // Priority sort (high to low)
-          const priorityOrder = { high: 0, medium: 1, low: 2 };
+          const priorityOrder = { high: 0, medium: 1, low: 2, none: 3 };
           const priorityDiff = priorityOrder[a.priority] - priorityOrder[b.priority];
 
           if (priorityDiff !== 0) return priorityDiff;
@@ -106,22 +109,26 @@ export default function ReviewerNoticesPage() {
   const getPriorityColor = (priority: string) => {
     switch (priority) {
       case 'high':
-        return 'bg-red-50 border-red-300 text-red-700';
+        return 'bg-red-50 border-l-4 border-red-500 text-red-800';
       case 'medium':
-        return 'bg-brand-yellow-50 border-brand-yellow-300 text-brand-yellow-700';
+        return 'bg-orange-50 border-l-4 border-orange-500 text-orange-800';
+      case 'low':
+        return 'bg-blue-50 border-l-4 border-blue-500 text-blue-800';
       default:
-        return 'bg-brand-green-50 border-brand-green-300 text-brand-green-700';
+        return 'bg-gray-50 border-l-4 border-gray-300 text-gray-800';
     }
   };
 
   const getPriorityBadgeColor = (priority: string) => {
     switch (priority) {
       case 'high':
-        return 'bg-red-100 text-red-800';
+        return 'bg-red-500 text-white';
       case 'medium':
-        return 'bg-brand-yellow-100 text-brand-yellow-700';
+        return 'bg-orange-500 text-white';
+      case 'low':
+        return 'bg-blue-500 text-white';
       default:
-        return 'bg-brand-green-100 text-brand-green-700';
+        return 'bg-gray-500 text-white';
     }
   };
 
@@ -132,7 +139,7 @@ export default function ReviewerNoticesPage() {
   };
 
   const formatDateNice = (timestamp: any) => {
-    if (!timestamp || !timestamp.toDate) return 'Unknown';
+    if (!timestamp || !timestamp.toDate) return 'Never expires';
     const date = timestamp.toDate();
     return format(date, 'MMM d, yyyy');
   };
@@ -207,6 +214,9 @@ export default function ReviewerNoticesPage() {
         </Link>
       </div>
 
+      {/* System Notices */}
+      <SystemNotice />
+
       {indexError && (
         <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 mb-4">
           <div className="flex items-start">
@@ -260,60 +270,60 @@ export default function ReviewerNoticesPage() {
           <p className="mt-2 text-gray-500">No active notices at this time.</p>
         </div>
       ) : (
-        <div className="space-y-4">
+        <div className="space-y-6">
           {notices.map((notice) => (
             <div
               key={notice.id}
-              className={`border rounded-lg shadow-sm overflow-hidden ${getPriorityColor(notice.priority)}`}
+              className="bg-white rounded-xl shadow-lg overflow-hidden transition-all duration-300 hover:shadow-xl"
             >
-              <div className="p-4 sm:p-6">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-2">
-                  <h2 className="text-lg sm:text-xl font-medium mb-1 sm:mb-0">{notice.title}</h2>
-                  <div className="flex flex-wrap items-center mt-1 sm:mt-0 space-x-2">
-                    <span
-                      className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getPriorityBadgeColor(
-                        notice.priority
-                      )}`}
-                    >
-                      {notice.priority.charAt(0).toUpperCase() + notice.priority.slice(1)} Priority
-                    </span>
-                    <span className="text-xs text-gray-500">
-                      Expires: {formatDateNice(notice.expires_at)}
+              <div className={`p-6 ${getPriorityColor(notice.priority)} border-b border-opacity-10`}>
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between">
+                  <div className="flex items-center">
+                    <h2 className="text-xl font-semibold">{notice.title}</h2>
+                  </div>
+                  <div className="mt-2 sm:mt-0 text-sm">
+                    <span className="text-gray-600">
+                      {notice.expires_at ? `Expires: ${formatDateNice(notice.expires_at)}` : 'Never expires'}
                     </span>
                   </div>
                 </div>
+              </div>
 
-                <div className="prose prose-sm sm:prose max-w-none mt-2">
+              <div className="p-6">
+                <div className="prose prose-sm sm:prose max-w-none">
                   {notice.content.split('\n').map((paragraph, idx) => (
-                    <p key={idx}>{paragraph}</p>
+                    <p key={idx} className="text-gray-700">{paragraph}</p>
                   ))}
                 </div>
 
-                <div className="mt-4 pt-3 border-t border-gray-200 flex flex-wrap items-center justify-between">
-                  <div className="text-xs text-gray-500">
-                    Posted: {formatDateNice(notice.created_at)}
+                <div className="mt-6 pt-4 border-t border-gray-100 flex flex-wrap items-center justify-between">
+                  <div className="text-sm text-gray-500 flex items-center space-x-2">
+                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <span>Posted: {formatDateNice(notice.created_at)}</span>
                   </div>
                   
                   <button
                     onClick={() => handleLikeToggle(notice.id)}
                     disabled={likesLoading[notice.id]}
-                    className={`flex items-center space-x-1 text-sm ${
+                    className={`flex items-center space-x-2 px-4 py-2 rounded-full transition-colors duration-200 ${
                       likedNotices[notice.id]
-                        ? 'text-blue-600'
-                        : 'text-gray-500 hover:text-blue-500'
+                        ? 'text-blue-600 bg-blue-50 hover:bg-blue-100'
+                        : 'text-gray-600 hover:bg-gray-100'
                     }`}
                   >
                     {likesLoading[notice.id] ? (
-                      <div className="h-4 w-4 animate-spin rounded-full border-2 border-blue-500 border-r-transparent"></div>
+                      <div className="h-5 w-5 animate-spin rounded-full border-2 border-blue-500 border-r-transparent"></div>
                     ) : (
                       <svg 
-                        className={`h-4 w-4 ${likedNotices[notice.id] ? 'fill-current' : 'stroke-current fill-none'}`} 
+                        className={`h-5 w-5 ${likedNotices[notice.id] ? 'fill-current' : 'stroke-current fill-none'}`} 
                         viewBox="0 0 24 24"
                       >
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 10h4.764a2 2 0 011.789 2.894l-3.5 7A2 2 0 0115.263 21h-4.017c-.163 0-.326-.02-.485-.06L7 20m7-10V5a2 2 0 00-2-2h-.095c-.5 0-.905.405-.905.905 0 .714-.211 1.412-.608 2.006L7 11v9m7-10h-2M7 20H5a2 2 0 01-2-2v-6a2 2 0 012-2h2.5" />
                       </svg>
                     )}
-                    <span>{getLikesCount(notice)} {getLikesCount(notice) === 1 ? 'Like' : 'Likes'}</span>
+                    <span className="font-medium">{getLikesCount(notice)} {getLikesCount(notice) === 1 ? 'Like' : 'Likes'}</span>
                   </button>
                 </div>
               </div>

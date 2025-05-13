@@ -8,6 +8,9 @@ import { db } from '@/lib/firebaseconfig';
 import { isOverdue, isDueSoon, formatDate, getFormTypeName } from '@/lib/utils';
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 import ProtocolStatusCard from '@/components/ProtocolStatusCard';
+import Onboarding from '@/components/Onboarding';
+// Import the colors utility
+import { COLORS, STYLES } from '@/lib/colors';
 
 interface Protocol {
   id: string;
@@ -1235,10 +1238,14 @@ export default function ReviewerDashboard() {
                 
                 return (
     <div className="p-2 sm:p-4 md:p-6 space-y-4 sm:space-y-6">
+      {/* Onboarding component for first-time users */}
+      <Onboarding />
+      
       <h1 className="text-xl sm:text-2xl font-semibold text-gray-800">Reviewer Dashboard</h1>
+      
       {loading ? (
         <div className="text-center py-10">
-          <div className="inline-block animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-brand-green-500"></div>
+          <div style={{ borderColor: COLORS.brand.green[500] }} className="inline-block animate-spin rounded-full h-8 w-8 border-t-2 border-b-2"></div>
           <p className="mt-2 text-gray-500">Loading your protocols...</p>
         </div>
       ) : error ? (
@@ -1277,10 +1284,10 @@ export default function ReviewerDashboard() {
             <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
                         <div className="flex items-center">
                 <div className="rounded-md bg-green-50 p-3 mr-3">
-                  <svg className="h-6 w-6 text-green-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                            </svg>
-                          </div>
+                  <svg style={{ color: COLORS.brand.green[600] }} className="h-6 w-6" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                  </svg>
+                </div>
                 <div>
                   <div className="text-sm text-gray-500">Completed</div>
                   <div className="text-xl font-bold">{statusCounts.completed}</div>
@@ -1322,36 +1329,40 @@ export default function ReviewerDashboard() {
             <h2 className="text-lg font-medium mb-4">Quick Access Form Links</h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
               <a 
-                href="https://forms.office.com/Pages/ResponsePage.aspx?id=DQSIkWdsW0yxEjajBLZtrQAAAAAAAAAAAAN__jZdNhdUQlE5MzA3UFRGNzVJMVpVMFo5SFJYVkc0OS4u"
+                href="https://forms.office.com/r/0nQCTjvBsv"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                style={STYLES.brandGreenButton} 
+                className="inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
               >
-                ICA Form
+                Informed Consent Assessment Form
               </a>
               <a 
-                href="https://forms.office.com/Pages/ResponsePage.aspx?id=DQSIkWdsW0yxEjajBLZtrQAAAAAAAAAAAAN__jZdNhdUQjBQQTdIWDFESFZIU1FaRFo1STlFWjc0Uy4u"
+                href="https://forms.office.com/r/4WuaHiiJar"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                style={STYLES.brandGreenButton} 
+                className="inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
               >
-                PRA Form
+                Protocol Review Assessment Form
               </a>
               <a 
-                href="https://forms.office.com/Pages/ResponsePage.aspx?id=DQSIkWdsW0yxEjajBLZtrQAAAAAAAAAAAAN__jZdNhdUOUpDVFhBNk9WNFVMUU42VE5XTFBDVkRMQi4u"
+                href="https://forms.office.com/r/n6RU8EuT3P"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                style={STYLES.brandGreenButton} 
+                className="inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
               >
-                CFEFR Form
+                Checklist for Exemption from Review Form
               </a>
               <a 
-                href="https://forms.office.com/Pages/ResponsePage.aspx?id=DQSIkWdsW0yxEjajBLZtrQAAAAAAAAAAAAN__jZdNhdUQk85VTIyNUE5VjFQTTVYMzNUNlRXUVA4Si4u"
+                href="https://forms.office.com/r/vT231a87fj"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                style={STYLES.brandGreenButton} 
+                className="inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
               >
-                PRA-EX Form
+                Protocol Review Assessment for Experimental Form 
               </a>
             </div>
           </div>

@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@types/papaparse": "^5.3.16",
+    "@vercel/speed-insights": "^1.2.0",
     "chart.js": "^4.4.9",
     "date-fns": "^4.1.0",
     "firebase": "^11.7.1",

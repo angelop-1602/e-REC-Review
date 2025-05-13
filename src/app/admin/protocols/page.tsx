@@ -9,7 +9,6 @@ import ProtocolTable from '@/components/ProtocolTable';
 import ProtocolStatusCard from '@/components/ProtocolStatusCard';
 import ProtocolDetailsModal from '@/components/ProtocolDetailsModal';
 import ReassignmentModal from '@/components/ReassignmentModal';
-import NotificationModal from '@/components/NotificationModal';
 
 interface Reviewer {
   id: string;
@@ -1087,14 +1086,6 @@ export default function ProtocolsPage() {
         />
       )}
 
-      {/* Notification Modal */}
-      <NotificationModal
-        isOpen={notification.isOpen}
-        type={notification.type}
-        title={notification.title}
-        message={notification.message}
-        onClose={() => setNotification({ ...notification, isOpen: false })}
-      />
     </div>
   );
 }

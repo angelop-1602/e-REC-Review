@@ -6,7 +6,7 @@ import { collection, getDocs, query, doc, updateDoc, getDoc, collectionGroup } f
 import { db } from '@/lib/firebaseconfig';
 import { isOverdue, isDueSoon, formatDate, getFormTypeName } from '@/lib/utils';
 import ReassignmentModal from '@/components/ReassignmentModal';
-import NotificationModal from '@/components/NotificationModal';
+
 import ProtocolStatusCard from '@/components/ProtocolStatusCard';
 
 interface Reviewer {
@@ -1075,14 +1075,6 @@ export default function DueDateMonitorPage() {
         </div>
       )}
 
-      {/* Notification Modal */}
-      <NotificationModal
-        isOpen={notification.isOpen}
-        type={notification.type}
-        title={notification.title}
-        message={notification.message}
-        onClose={() => setNotification({ ...notification, isOpen: false })}
-      />
     </div>
   );
 } 

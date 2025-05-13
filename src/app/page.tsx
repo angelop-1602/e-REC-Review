@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { collection, getDocs, query, DocumentData } from 'firebase/firestore';
 import { db } from '@/lib/firebaseconfig';
 import { useRouter } from 'next/navigation';
+import { COLORS, STYLES } from '@/lib/colors';
 
 interface Protocol {
   protocol_name: string;
@@ -127,18 +128,17 @@ export default function HomePage() {
   };
 
   return (
-    <div className="flex flex-col min-h-screen bg-gradient-to-b from-blue-50 to-indigo-100">
-      <header className="bg-slate-800 text-white p-4">
+    <div className="flex flex-col min-h-screen bg-gradient-to-b from-green-50 to-emerald-100">
+      <header style={{ backgroundColor: COLORS.brand.green[800] }} className="text-white p-4">
         <div className="container mx-auto flex justify-between items-center">
           <h1 className="text-2xl font-bold">e-REC Ethics Review System</h1>
-
         </div>
       </header>
       
       <main className="flex-grow flex items-center justify-center p-4 ">
         <div className="bg-white p-8 rounded-lg shadow-lg w-full max-w-md">
           <div className="text-center mb-6">
-            <h1 className="text-2xl font-bold text-slate-800">e-REC Reviewer Portal</h1>
+            <h1 style={STYLES.brandGreenText} className="text-2xl font-bold">e-REC Reviewer Portal</h1>
             <p className="text-gray-600 mt-2">Sign in to access your assigned protocols</p>
           </div>
           
@@ -159,7 +159,7 @@ export default function HomePage() {
                 placeholder="e.g., XXXX-0000"
                 value={reviewerInput}
                 onChange={(e) => setReviewerInput(e.target.value)}
-                className="w-full p-3 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full p-3 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-green-500"
                 required
               />
               <p className="mt-1 text-xs text-gray-500">
@@ -170,7 +170,8 @@ export default function HomePage() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full bg-blue-600 text-white py-3 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50"
+              style={STYLES.brandGreenButton}
+              className="w-full py-3 rounded-md hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 disabled:opacity-50"
             >
               {loading ? 'Signing in...' : 'Sign In'}
             </button>
@@ -178,7 +179,7 @@ export default function HomePage() {
         </div>
       </main>
       
-      <footer className="mt-auto bg-slate-800 text-white p-4">
+      <footer style={{ backgroundColor: COLORS.brand.green[800] }} className="mt-auto text-white p-4">
         <div className="container mx-auto text-center text-sm">
           &copy; {new Date().getFullYear()} e-REC Ethics Review System
         </div>

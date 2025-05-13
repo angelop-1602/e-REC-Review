@@ -4,7 +4,7 @@
 import React, { useState, useEffect } from 'react';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebaseconfig';
-import NotificationModal from '@/components/NotificationModal';
+
 
 interface NotificationSettings {
   enabled: boolean;
@@ -367,14 +367,7 @@ export default function NotificationsSettingsPage() {
           </div>
         </div>
       </div>
-      
-      <NotificationModal
-        isOpen={notification.isOpen}
-        type={notification.type}
-        title={notification.title}
-        message={notification.message}
-        onClose={() => setNotification({ ...notification, isOpen: false })}
-      />
+
     </div>
   );
 } 

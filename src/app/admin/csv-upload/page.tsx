@@ -4,7 +4,6 @@ import { useState, useRef } from 'react';
 import { setDoc, doc, collection } from 'firebase/firestore';
 import { db } from '@/lib/firebaseconfig';
 import Papa from 'papaparse';
-import NotificationModal from '@/components/NotificationModal';
 
 // Interface for the CSV row data
 interface CSVRow {
@@ -427,15 +426,7 @@ export default function TestPage() {
           </div>
         </div>
       )}
-      
-      {/* Notification Modal */}
-      <NotificationModal
-        isOpen={notification.isOpen}
-        type={notification.type}
-        title={notification.title}
-        message={notification.message}
-        onClose={() => setNotification({ ...notification, isOpen: false })}
-      />
+
     </div>
   );
 } 
