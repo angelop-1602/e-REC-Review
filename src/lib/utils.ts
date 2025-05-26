@@ -214,7 +214,7 @@ export function isOverdue(dueDate: string): boolean {
   return dueDateObj < today;
 }
 
-// Check if a protocol is due soon (within 3 days)
+// Check if a protocol is due soon (within 7 days)
 export function isDueSoon(dueDate: string): boolean {
   if (!dueDate || isOverdue(dueDate)) return false;
   
@@ -226,7 +226,7 @@ export function isDueSoon(dueDate: string): boolean {
   const diffTime = dueDateObj.getTime() - today.getTime();
   const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
   
-  return diffDays <= 3;
+  return diffDays <= 7 && diffDays >= 0;
 }
 
 // Format date for display (YYYY-MM-DD to MM/DD/YYYY)

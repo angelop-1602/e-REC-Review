@@ -67,6 +67,14 @@ export default function AdminDashboard() {
     dueDate: string;
     protocolPath?: string;
   }[]>([]);
+  const [dueSoonReviewers, setDueSoonReviewers] = useState<{
+    protocolId: string;
+    spupRecCode: string;
+    reviewerId: string;
+    reviewerName: string;
+    dueDate: string;
+    protocolPath?: string;
+  }[]>([]);
   const [, setReviewerStats] = useState<{
     reviewerId: string;
     name: string;
@@ -530,20 +538,6 @@ export default function AdminDashboard() {
           ]
         });
         
-        // Set all the state
-        setOverdueProtocols(sortedOverdue.slice(0, 5));
-        setUpcomingDueProtocols(sortedUpcoming.slice(0, 5));
-        setRecentProtocols(sortedRecent);
-        setReviewerStats(sortedReviewers);
-        setStats({
-          totalProtocols: uniqueProtocolCount,
-          totalReviews: protocols.length,
-          overdueCount: overdue.length,
-          completedCount: completed,
-          inProgressCount: inProgress + partiallyCompleted,
-          dueSoonCount: upcoming.length
-        });
-        
         // Extract overdue reviewers from all protocols
         const extractedOverdueReviewers: {
           protocolId: string;
@@ -553,7 +547,15 @@ export default function AdminDashboard() {
           dueDate: string;
           protocolPath?: string;
         }[] = [];
-        
+        // Extract due soon reviewers from all protocols
+        const extractedDueSoonReviewers: {
+          protocolId: string;
+          spupRecCode: string;
+          reviewerId: string;
+          reviewerName: string;
+          dueDate: string;
+          protocolPath?: string;
+        }[] = [];
         // Collect data for calculating fastest reviewers
         const reviewerCompletionTimes: Record<string, {
           reviewerId: string,
@@ -561,7 +563,6 @@ export default function AdminDashboard() {
           completionTimes: number[],  // Time in days
           completedCount: number
         }> = {};
-        
         protocols.forEach(protocol => {
           if (protocol.reviewers && protocol.reviewers.length > 0) {
             protocol.reviewers.forEach(reviewer => {
@@ -577,23 +578,25 @@ export default function AdminDashboard() {
                   protocolPath: protocol._path
                 });
               }
-              
+              // Process due soon reviewers
+              if (reviewer.status !== 'Completed' && reviewerDueDate && !isOverdue(reviewerDueDate) && isDueSoon(reviewerDueDate)) {
+                extractedDueSoonReviewers.push({
+                  protocolId: protocol.id,
+                  spupRecCode: protocol.spup_rec_code || protocol.id,
+                  reviewerId: reviewer.id,
+                  reviewerName: reviewer.name,
+                  dueDate: reviewerDueDate,
+                  protocolPath: protocol._path
+                });
+              }
               // Process completed reviews for speed calculation
               if (reviewer.status === 'Completed' && reviewer.completed_at && reviewer.due_date) {
                 const dueDate = new Date(ensureValidDueDate(reviewer.due_date));
                 const completedDate = new Date(reviewer.completed_at);
-                
-                // Skip invalid dates
                 if (isNaN(dueDate.getTime()) || isNaN(completedDate.getTime())) {
                   return;
                 }
-                
-                // Get days between assignment and completion
-                // If completed before due date, this will be negative (good)
-                // If completed after due date, this will be positive (not good)
                 const daysDifference = (completedDate.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24);
-                
-                // Store the reviewer's completion time
                 if (!reviewerCompletionTimes[reviewer.id]) {
                   reviewerCompletionTimes[reviewer.id] = {
                     reviewerId: reviewer.id,
@@ -602,31 +605,49 @@ export default function AdminDashboard() {
                     completedCount: 0
                   };
                 }
-                
                 reviewerCompletionTimes[reviewer.id].completionTimes.push(daysDifference);
                 reviewerCompletionTimes[reviewer.id].completedCount++;
               }
             });
           }
         });
-        
         // Sort by due date (oldest first)
         extractedOverdueReviewers.sort((a, b) => a.dueDate.localeCompare(b.dueDate));
         setOverdueReviewers(extractedOverdueReviewers);
+        // Sort due soon reviewers by due date (soonest first)
+        extractedDueSoonReviewers.sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+        setDueSoonReviewers(extractedDueSoonReviewers);
+        // Debug log
+        console.log('Extracted Due Soon Reviewers:', extractedDueSoonReviewers);
         
         // Calculate average completion times and find fastest reviewers
         const fastestReviewersArray = Object.values(reviewerCompletionTimes)
-          .filter(reviewer => reviewer.completedCount >= 3) // Only include reviewers with at least 3 completed reviews
+          .filter(reviewer => reviewer.completedCount > 0) // Only include reviewers with at least 1 completed review
           .map(reviewer => ({
             reviewerId: reviewer.reviewerId,
             name: reviewer.name,
             averageCompletionDays: reviewer.completionTimes.reduce((sum, time) => sum + time, 0) / reviewer.completionTimes.length,
             completedCount: reviewer.completedCount
           }))
-          .sort((a, b) => a.averageCompletionDays - b.averageCompletionDays) // Sort by average time (ascending)
-          .slice(0, 5); // Get top 5
-        
+          .sort((a, b) => a.name.localeCompare(b.name)); // Sort alphabetically by name
         setFastestReviewers(fastestReviewersArray);
+        
+        // Calculate protocol counts for status cards
+        const overdueProtocolCount = new Set(extractedOverdueReviewers.map(r => r.protocolId)).size;
+        const dueSoonProtocolCount = new Set(extractedDueSoonReviewers.map(r => r.protocolId)).size;
+        // Set all the state
+        setOverdueProtocols(sortedOverdue.slice(0, 5));
+        setUpcomingDueProtocols(sortedUpcoming.slice(0, 5));
+        setRecentProtocols(sortedRecent);
+        setReviewerStats(sortedReviewers);
+        setStats({
+          totalProtocols: uniqueProtocolCount,
+          totalReviews: protocols.length,
+          overdueCount: overdueProtocolCount,
+          completedCount: completed,
+          inProgressCount: inProgress + partiallyCompleted,
+          dueSoonCount: dueSoonProtocolCount
+        });
       } catch (err) {
         console.error("Error fetching dashboard data:", err);
         setError("Failed to load dashboard data");
@@ -651,6 +672,24 @@ export default function AdminDashboard() {
       return <span className="bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded-full">In Progress</span>;
     }
   };
+
+  // Reviewer Completion Speed Analytics Data
+  const reviewerSpeedData = fastestReviewers.length > 0 ? (() => {
+    // Sort reviewers from fastest (lowest avg days) to slowest (highest avg days)
+    const sorted = [...fastestReviewers].sort((a, b) => a.averageCompletionDays - b.averageCompletionDays);
+    const slowestIndex = sorted.length > 0 ? sorted.length - 1 : 0;
+    return {
+      labels: sorted.map(r => r.name),
+      datasets: [
+        {
+          label: 'Average Completion Days',
+          // Reverse the sign so bars go left to right
+          data: sorted.map(r => Number((-r.averageCompletionDays).toFixed(2))),
+          backgroundColor: sorted.map((_, idx) => idx === slowestIndex ? 'rgba(239, 68, 68, 0.7)' : 'rgba(59, 130, 246, 0.7)'),
+        }
+      ]
+    };
+  })() : null;
 
   if (loading) {
     return (
@@ -800,11 +839,10 @@ export default function AdminDashboard() {
             )}
           </div>
         </div>
-        
-        {/* Upcoming Due Protocols */}
+        {/* Due Soon Reviewers */}
         <div className="bg-white rounded-lg shadow-md">
           <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
-            <h3 className="text-lg font-medium text-gray-900">Due Soon</h3>
+            <h3 className="text-lg font-medium text-gray-900">Due Soon Reviewers</h3>
             <Link 
               href="/admin/due-dates?filter=due-soon" 
               className="text-blue-600 hover:text-blue-800 text-sm"
@@ -813,31 +851,37 @@ export default function AdminDashboard() {
             </Link>
           </div>
           <div className="p-4">
-            {upcomingDueProtocols.length > 0 ? (
+            {dueSoonReviewers.length > 0 ? (
               <ul className="divide-y divide-gray-200">
-                {upcomingDueProtocols.map((protocol) => (
-                  <li key={protocol.id} className="py-3">
+                {dueSoonReviewers.slice(0, 5).map((item, index) => (
+                  <li key={index} className="py-3">
                     <div className="flex justify-between">
                       <div>
                         <p className="text-sm font-medium text-gray-900">
-                          {protocol.spup_rec_code || protocol.id}
+                          {item.spupRecCode}
                         </p>
                         <p className="text-xs text-gray-500">
-                          {protocol.principal_investigator || 'No Principal Investigator'}
+                          Reviewer: <span className="font-medium">{item.reviewerName}</span>
                         </p>
                         <p className="text-xs text-gray-500">
-                          Due: {formatDate(protocol.due_date)} · {protocol.release_period}
+                          Due: {formatDate(item.dueDate)}
                         </p>
                       </div>
-                      <div>
-                        {getStatusBadge(protocol.status, protocol.due_date)}
+                      <div className="flex flex-col items-end">
+                        <span className="bg-yellow-100 text-yellow-800 text-xs px-2 py-1 rounded-full mb-2">Due Soon</span>
+                        <Link 
+                          href={`/admin/protocols/${item.protocolId}/reviewer/${item.reviewerName}/reassign`}
+                          className="text-blue-600 hover:text-blue-800 text-xs"
+                        >
+                          Reassign
+                        </Link>
                       </div>
                     </div>
                   </li>
                 ))}
               </ul>
             ) : (
-              <p className="text-center py-4 text-gray-500">No protocols due soon.</p>
+              <p className="text-center py-4 text-gray-500">No reviewers due soon.</p>
             )}
           </div>
         </div>
@@ -896,7 +940,7 @@ export default function AdminDashboard() {
         {/* Fastest Reviewers */}
         <div className="bg-white rounded-lg shadow-md">
           <div className="px-6 py-4 border-b border-gray-200">
-            <h3 className="text-lg font-medium text-gray-900">Fastest Reviewers</h3>
+            <h3 className="text-lg font-medium text-gray-900">Completed Reviews for the Reviewers</h3>
           </div>
           <div className="p-4">
             {fastestReviewers.length > 0 ? (
@@ -909,19 +953,6 @@ export default function AdminDashboard() {
                         <p className="text-xs text-gray-500">
                           {reviewer.completedCount} reviews completed
                         </p>
-                      </div>
-                      <div className="flex items-center">
-                        <span className={`px-2 py-1 text-xs rounded-full ${
-                          reviewer.averageCompletionDays <= 0 
-                            ? 'bg-green-100 text-green-800' 
-                            : reviewer.averageCompletionDays <= 2
-                              ? 'bg-blue-100 text-blue-800'
-                              : 'bg-yellow-100 text-yellow-800'
-                        }`}>
-                          {reviewer.averageCompletionDays <= 0 
-                            ? `${Math.abs(reviewer.averageCompletionDays).toFixed(1)} days early`
-                            : `${reviewer.averageCompletionDays.toFixed(1)} days to complete`}
-                        </span>
                       </div>
                     </div>
                   </li>
@@ -990,6 +1021,50 @@ export default function AdminDashboard() {
           </div>
         )}
       </div>
+
+      {/* Reviewer Completion Speed Analytics */}
+      {reviewerSpeedData && (
+        <div className="bg-white rounded-lg shadow p-6 my-8">
+          <h2 className="text-xl font-bold mb-4">Reviewer Completion Speed Analytics</h2>
+          <div className="h-96">
+            <Chart
+              data={reviewerSpeedData}
+              options={{
+                indexAxis: 'y',
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                  x: {
+                    title: {
+                      display: true,
+                      text: 'Average Completion Days (higher = earlier completion)'
+                    }
+                  },
+                  y: {
+                    title: {
+                      display: true,
+                      text: 'Reviewer'
+                    }
+                  }
+                },
+                plugins: {
+                  legend: { display: false } as const,
+                  tooltip: {
+                    callbacks: {
+                      label: (ctx: any) => {
+                        // Show the original value (with sign)
+                        const idx = ctx.dataIndex;
+                        const orig = fastestReviewers.length > 0 ? [...fastestReviewers].sort((a, b) => a.averageCompletionDays - b.averageCompletionDays)[idx].averageCompletionDays : 0;
+                        return `${orig > 0 ? '+' : ''}${orig.toFixed(2)} days`;
+                      }
+                    }
+                  }
+                }
+              }}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

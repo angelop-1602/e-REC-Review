@@ -789,61 +789,6 @@ export default function ProtocolsPage() {
           Manage, filter and view all submitted protocols. Click on a protocol to view more details.
         </p>
       </div>
-
-      {/* Status Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-6">
-        <ProtocolStatusCard 
-          title="Total Protocols" 
-          count={statusCounts.total} 
-          icon={
-            <svg className="w-8 h-8 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
-            </svg>
-          }
-          color="blue"
-        />
-        <ProtocolStatusCard 
-          title="Completed" 
-          count={statusCounts.completed} 
-          icon={
-            <svg className="w-8 h-8 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path>
-            </svg>
-          }
-          color="green"
-        />
-        <ProtocolStatusCard 
-          title="In Progress" 
-          count={statusCounts.inProgress} 
-          icon={
-            <svg className="w-8 h-8 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-            </svg>
-          }
-          color="blue"
-        />
-        <ProtocolStatusCard 
-          title="Overdue" 
-          count={statusCounts.overdue} 
-          icon={
-            <svg className="w-8 h-8 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-            </svg>
-          }
-          color="red"
-        />
-        <ProtocolStatusCard 
-          title="Due Soon" 
-          count={statusCounts.dueSoon} 
-          icon={
-            <svg className="w-8 h-8 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-            </svg>
-          }
-          color="yellow"
-        />
-      </div>
-
       {/* Search and Filters */}
       <div className="bg-white p-4 rounded-lg shadow mb-6">
         <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-4">

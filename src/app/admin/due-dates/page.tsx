@@ -37,6 +37,7 @@ interface Protocol {
   principal_investigator?: string;
   adviser?: string;
   _path?: string;
+  reassignment_history?: any[];
 }
 
 export default function DueDateMonitorPage() {
@@ -87,38 +88,30 @@ export default function DueDateMonitorPage() {
     });
   };
 
-  // Helper function to ensure due dates are in the correct format
-  const ensureValidDueDate = (dueDate: any): string => {
+  // Helper function to ensure due dates are in the correct format (copied from dashboard)
+  const ensureValidDueDate = (dueDate: string | Date | { toDate(): Date } | undefined): string => {
     if (!dueDate) return '';
-    
-    // If it's already a string in YYYY-MM-DD format, return it
     if (typeof dueDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dueDate)) {
       return dueDate;
     }
-    
-    // If it's a timestamp object from Firestore
-    if (dueDate && typeof dueDate === 'object' && dueDate.toDate) {
+    if (dueDate && typeof dueDate === 'object' && 'toDate' in dueDate) {
       try {
         const date = dueDate.toDate();
-        return date.toISOString().split('T')[0]; // Get YYYY-MM-DD part
+        return date.toISOString().split('T')[0];
       } catch (err) {
         console.error('Error converting timestamp to date:', err);
       }
     }
-    
-    // If it's a date string but not in YYYY-MM-DD format, try to convert it
     if (typeof dueDate === 'string' && dueDate.trim() !== '') {
       try {
         const date = new Date(dueDate);
         if (!isNaN(date.getTime())) {
-          return date.toISOString().split('T')[0]; // Get YYYY-MM-DD part
+          return date.toISOString().split('T')[0];
         }
       } catch (err) {
         console.error('Error parsing date string:', err);
       }
     }
-    
-    // If we got here, we couldn't parse the due date
     console.warn(`Could not parse due date: ${dueDate}`);
     return '';
   };
@@ -176,223 +169,57 @@ export default function DueDateMonitorPage() {
     const fetchProtocols = async () => {
       try {
         setLoading(true);
-        
-        // Initialize array to hold all protocols
-        const fetchedProtocols: Protocol[] = [];
-        const uniqueReleases = new Set<string>();
-        const uniqueReviewers = new Map<string, { id: string; name: string }>();
-        
-        // Query the hierarchical structure
-        console.log('Fetching protocols from Firebase...');
-        
-        // First, attempt to use collectionGroup query for most efficient retrieval
-        try {
-          console.log("Attempting collectionGroup query...");
-          
-          // Use collection group queries to get all protocol documents across all subcollections
-          for (let weekNum = 1; weekNum <= 4; weekNum++) {
-            const weekCollection = `week-${weekNum}`;
-            console.log(`Querying collection group: ${weekCollection}`);
-            const protocolsGroupQuery = query(collectionGroup(db, weekCollection));
-            const protocolsGroupSnapshot = await getDocs(protocolsGroupQuery);
-            
-            console.log(`Found ${protocolsGroupSnapshot.size} documents in ${weekCollection}`);
-            
-            // Process protocols from the collection group query
-            for (const protocolDoc of protocolsGroupSnapshot.docs) {
-              const data = protocolDoc.data() as Protocol;
-              const path = protocolDoc.ref.path;
-              
-              // Extract the month and week from the path
-              // Path format: "protocols/{month}/{week}/{SPUP_REC_Code}"
-              const pathParts = path.split('/');
-              if (pathParts.length < 4) {
-                console.log(`Invalid path format for protocol: ${path}`);
-                continue;
-              }
-              
-              const monthId = pathParts[1];
-              const weekId = pathParts[2];
-              
-              // Create a mapped protocol that works with our UI
-              const mappedProtocol: Protocol = {
-                ...data,
-                id: protocolDoc.id,
-                // Map new field names to consistent names for the UI
-                protocol_name: data.research_title || '',
-                protocol_file: data.e_link || '',
-                release_period: `${monthId} ${weekId}`,
-                academic_level: data.course_program || '',
-                // Ensure the due date is valid and in the correct format
-                due_date: ensureValidDueDate(data.due_date),
-                // Add missing required fields with defaults if not present
-                status: data.status || 'In Progress',
-                created_at: data.created_at || new Date().toISOString(),
-                // Add metadata for tracking
-                _path: `${monthId}/${weekId}/${protocolDoc.id}`
-              };
-              
-              // Only add protocols with a valid due date
-              if (mappedProtocol.due_date && mappedProtocol.due_date.trim() !== '') {
-                fetchedProtocols.push(mappedProtocol);
-                
-                if (mappedProtocol.release_period) {
-                  uniqueReleases.add(mappedProtocol.release_period);
-                }
-                
-                // Extract reviewers for filters
-                if (mappedProtocol.reviewers && mappedProtocol.reviewers.length > 0) {
-                  mappedProtocol.reviewers.forEach((reviewer: Reviewer) => {
-                    if (reviewer.id && reviewer.name) {
-                      uniqueReviewers.set(reviewer.id, {
-                        id: reviewer.id,
-                        name: reviewer.name
-                      });
-                    }
-                  });
-                }
-              }
-            }
-          }
-        } catch (err) {
-          console.error("CollectionGroup query failed, falling back to hierarchical queries:", err);
-          
-          // Fallback to hierarchical queries if collectionGroup is not set up
-          // First get all month documents
-          const monthsRef = collection(db, 'protocols');
-          console.log(`Fetching months from protocols collection...`);
-          const monthsSnapshot = await getDocs(monthsRef);
-          console.log(`Found ${monthsSnapshot.docs.length} documents in protocols collection`);
-          
-          // For each month, get all weeks
-          for (const monthDoc of monthsSnapshot.docs) {
-            const monthId = monthDoc.id;
-            console.log(`Processing month: ${monthId}`);
-            
-            try {
-              // Get weeks within this month
-              const weeksRef = collection(monthDoc.ref, monthId);
-              console.log(`Fetching weeks for month ${monthId}...`);
-              const weeksSnapshot = await getDocs(weeksRef);
-              console.log(`Found ${weeksSnapshot.docs.length} weeks for month ${monthId}`);
-              
-              // For each week, get all protocols
-              for (const weekDoc of weeksSnapshot.docs) {
-                const weekId = weekDoc.id;
-                console.log(`Processing week: ${weekId} in month ${monthId}`);
-                
-                // Get protocols within this week
-                const protocolsRef = collection(weekDoc.ref, weekId);
-                console.log(`Fetching protocols for ${monthId}/${weekId}...`);
-                const protocolsSnapshot = await getDocs(protocolsRef);
-                console.log(`Found ${protocolsSnapshot.docs.length} protocols in ${monthId}/${weekId}`);
-                
-                for (const protocolDoc of protocolsSnapshot.docs) {
-                  const data = protocolDoc.data();
-                  
-                  // Create a mapped protocol that works with our UI
-                  const mappedProtocol: Protocol = {
-                    ...data,
-                    id: protocolDoc.id,
-                    // Map new field names to consistent names for the UI
-                    protocol_name: data.research_title || '',
-                    protocol_file: data.e_link || '',
-                    release_period: `${monthId} ${weekId}`,
-                    academic_level: data.course_program || '',
-                    // Ensure the due date is valid and in the correct format
-                    due_date: ensureValidDueDate(data.due_date),
-                    // Add missing required fields with defaults if not present in data
-                    status: data.status || 'In Progress',
-                    created_at: data.created_at || new Date().toISOString(),
-                    // Add metadata for tracking
-                    _path: `${monthId}/${weekId}/${protocolDoc.id}`
-                  };
-                  
-                  // Only add protocols with a valid due date
-                  if (mappedProtocol.due_date && mappedProtocol.due_date.trim() !== '') {
-                    fetchedProtocols.push(mappedProtocol);
-                    
-                    if (mappedProtocol.release_period) {
-                      uniqueReleases.add(mappedProtocol.release_period);
-                    }
-                    
-                    // Extract reviewers for filters
-                    if (mappedProtocol.reviewers && mappedProtocol.reviewers.length > 0) {
-                      mappedProtocol.reviewers.forEach((reviewer: Reviewer) => {
-                        if (reviewer.id && reviewer.name) {
-                          uniqueReviewers.set(reviewer.id, {
-                            id: reviewer.id,
-                            name: reviewer.name
-                          });
-                        }
-                      });
-                    }
-                  }
-                }
-              }
-            } catch (err) {
-              console.error(`Error fetching protocols for month ${monthId}:`, err);
-              // Continue with other months even if one fails
-            }
+        const protocols: Protocol[] = [];
+        for (let weekNum = 1; weekNum <= 4; weekNum++) {
+          const weekCollection = `week-${weekNum}`;
+          const protocolsGroupQuery = query(collectionGroup(db, weekCollection));
+          const protocolsGroupSnapshot = await getDocs(protocolsGroupQuery);
+          for (const protocolDoc of protocolsGroupSnapshot.docs) {
+            const data = protocolDoc.data() as Protocol;
+            const path = protocolDoc.ref.path;
+            const pathParts = path.split('/');
+            if (pathParts.length < 4) continue;
+            const monthId = pathParts[1];
+            const weekId = pathParts[2];
+            const mappedProtocol: Protocol = {
+              ...data,
+              id: protocolDoc.id,
+              protocol_name: data.research_title || '',
+              protocol_file: data.e_link || '',
+              release_period: `${monthId} ${weekId}`,
+              academic_level: data.course_program || '',
+              due_date: ensureValidDueDate(data.due_date),
+              status: data.status || 'In Progress',
+              created_at: data.created_at || new Date().toISOString(),
+              _path: `${monthId}/${weekId}/${protocolDoc.id}`
+            };
+            protocols.push(mappedProtocol);
           }
         }
-        
-        console.log(`Fetched a total of ${fetchedProtocols.length} protocols with due dates.`);
-        
-        // Convert uniqueReviewers map to array for the reviewer list dropdown
-        setReviewerList(Array.from(uniqueReviewers.values()));
-        setProtocols(fetchedProtocols);
-        
-        // Sort release periods chronologically
-        const sortedReleases = Array.from(uniqueReleases).sort((a, b) => {
-          const aIsNumerical = /first|second|third|fourth/i.test(a);
-          const bIsNumerical = /first|second|third|fourth/i.test(b);
-          
-          if (aIsNumerical && !bIsNumerical) return -1;
-          if (!aIsNumerical && bIsNumerical) return 1;
-          
-          if (aIsNumerical && bIsNumerical) {
-            const orderMap: {[key: string]: number} = {
-              'first': 1, 'second': 2, 'third': 3, 'fourth': 4
-            };
-            const aOrder = orderMap[a.toLowerCase().split(' ')[0]] || 99;
-            const bOrder = orderMap[b.toLowerCase().split(' ')[0]] || 99;
-            return aOrder - bOrder;
-          }
-          
-          // For monthly releases, sort by month
-          return a.localeCompare(b);
-        });
-        
-        setReleaseOptions(sortedReleases);
+        setProtocols(protocols);
       } catch (err) {
         console.error('Error fetching protocols:', err);
-        showNotification('error', 'Error', 'Failed to load protocols');
+        setNotification({
+          isOpen: true,
+          type: 'error',
+          title: 'Error',
+          message: 'Failed to load protocols'
+        });
       } finally {
         setLoading(false);
       }
     };
-    
     fetchProtocols();
   }, []);
 
   // Filter protocols based on filters
   const filteredProtocols = protocols.filter(protocol => {
-    // Only include protocols with a due date
-    if (!protocol.due_date || protocol.due_date.trim() === '') {
-      return false;
-    }
-    
-    // Filter by status
-    const matchesStatus = 
-      selectedFilter === 'all' || 
-      (selectedFilter === 'overdue' && isOverdue(protocol.due_date) && protocol.status !== 'Completed') ||
-      (selectedFilter === 'due-soon' && isDueSoon(protocol.due_date) && protocol.status !== 'Completed');
-    
     // Filter by search term
     const matchesSearch = 
       searchTerm === '' || 
-      protocol.protocol_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      protocol.protocol_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      protocol.spup_rec_code?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      protocol.principal_investigator?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       (protocol.reviewer && protocol.reviewer.toLowerCase().includes(searchTerm.toLowerCase())) ||
       (protocol.reviewers && protocol.reviewers.some(r => r.name.toLowerCase().includes(searchTerm.toLowerCase())));
     
@@ -401,14 +228,63 @@ export default function DueDateMonitorPage() {
       filterRelease === 'all' || 
       protocol.release_period === filterRelease;
     
-    return matchesStatus && matchesSearch && matchesRelease;
+    return matchesSearch && matchesRelease;
   });
+
+  // Extract overdue reviewers from all protocols (dashboard logic)
+  const extractedOverdueReviewers = protocols.flatMap(protocol => {
+    if (protocol.reviewers && protocol.reviewers.length > 0) {
+      return protocol.reviewers
+        .map(reviewer => {
+          const reviewerDueDate = ensureValidDueDate(reviewer.due_date || '');
+          if (reviewer.status !== 'Completed' && reviewerDueDate && isOverdue(reviewerDueDate)) {
+            return {
+              protocolId: protocol.id,
+              spupRecCode: protocol.spup_rec_code || protocol.id,
+              reviewerId: reviewer.id,
+              reviewerName: reviewer.name,
+              dueDate: reviewerDueDate,
+              protocolPath: protocol._path
+            };
+          }
+          return null;
+        })
+        .filter(Boolean);
+    } else if (protocol.reviewer && protocol.status !== 'Completed' && isOverdue(protocol.due_date)) {
+      return [{
+        protocolId: protocol.id,
+        spupRecCode: protocol.spup_rec_code || protocol.id,
+        reviewerId: protocol.reviewer,
+        reviewerName: protocol.reviewer,
+        dueDate: protocol.due_date,
+        protocolPath: protocol._path
+      }];
+    }
+    return [];
+  });
+  const sortedOverdueReviewers = [...extractedOverdueReviewers].filter(Boolean).sort((a, b) => {
+    if (!a || !b || !a.dueDate || !b.dueDate) return 0;
+    return a.dueDate.localeCompare(b.dueDate);
+  });
+  console.log('Extracted Overdue Reviewers:', sortedOverdueReviewers);
 
   // Count protocols by status - only for protocols with due dates
   const counts = {
     total: protocols.length,
-    overdue: protocols.filter(p => p.due_date && isOverdue(p.due_date) && p.status !== 'Completed').length,
-    dueSoon: protocols.filter(p => p.due_date && isDueSoon(p.due_date) && p.status !== 'Completed').length,
+    overdue: extractedOverdueReviewers.length,
+    dueSoon: protocols.filter(p => {
+      const latestDueDate = getLatestDueDate(p);
+      return (
+        // Check if protocol is due soon
+        (latestDueDate && isDueSoon(latestDueDate) && p.status !== 'Completed') ||
+        // Or if any reviewer is due soon
+        (p.reviewers && p.reviewers.some(r => 
+          r.status !== 'Completed' && 
+          r.due_date && 
+          isDueSoon(r.due_date)
+        ))
+      );
+    }).length,
     completed: protocols.filter(p => p.status === 'Completed').length,
   };
 
@@ -417,7 +293,6 @@ export default function DueDateMonitorPage() {
   };
 
   const initiateReassign = (protocol: Protocol, reviewerId: string, reviewerName: string) => {
-    // Find the reviewer's current due date
     let currentDueDate = '';
     if (protocol.reviewers && protocol.reviewers.length > 0) {
       const reviewer = protocol.reviewers.find(r => r.id === reviewerId);
@@ -425,7 +300,6 @@ export default function DueDateMonitorPage() {
         currentDueDate = ensureValidDueDate(reviewer.due_date);
       }
     }
-    
     setReassignmentData({
       protocolId: protocol.id,
       protocolName: protocol.protocol_name || protocol.research_title || '',
@@ -440,21 +314,16 @@ export default function DueDateMonitorPage() {
   const handleReassign = async (newReviewerId: string, newDueDate?: string) => {
     try {
       if (!reassignmentData) return;
-      
       setReassignmentData({
         ...reassignmentData,
         loading: true
       });
-      
       const { protocolId, reviewerId, currentDueDate } = reassignmentData;
       const protocol = protocols.find(p => p.id === protocolId);
-      
       if (!protocol) {
         showNotification('error', 'Error', 'Protocol not found');
         return;
       }
-      
-      // Get the document reference using the protocol path
       let protocolRef;
       if (protocol._path) {
         const pathParts = protocol._path.split('/');
@@ -469,52 +338,48 @@ export default function DueDateMonitorPage() {
         showNotification('error', 'Error', 'Protocol path information missing');
         return;
       }
-      
-      // Get the current protocol data
       const protocolDoc = await getDoc(protocolRef);
-      
       if (!protocolDoc.exists()) {
         showNotification('error', 'Error', 'Protocol document not found');
         return;
       }
-      
       const protocolData = protocolDoc.data();
-      
-      // Find the new reviewer from the list to get their name
       const newReviewer = reviewerList.find(r => r.id === newReviewerId);
       if (!newReviewer) {
         showNotification('error', 'Error', 'New reviewer not found');
         return;
       }
-      
-      // Use the provided new due date or keep the current one
       const dueDateToUse = newDueDate || currentDueDate;
-      
-      // Create updated reviewers array
       let updatedReviewers: Reviewer[] = [];
-      
-      // Handle protocols with reviewers array
+      let previousReviewerInfo = null;
       if (protocolData.reviewers && Array.isArray(protocolData.reviewers)) {
-        // Find the reviewer to replace
         updatedReviewers = [...protocolData.reviewers];
-        
-        // Find the reviewer index
         const reviewerIndex = updatedReviewers.findIndex(r => r.id === reviewerId);
-        
         if (reviewerIndex >= 0) {
-          // Replace the reviewer, keeping other properties the same but updating due date
+          // Save previous reviewer info
+          const prev = updatedReviewers[reviewerIndex];
+          previousReviewerInfo = {
+            id: prev.id,
+            name: prev.name,
+            due_date: prev.due_date,
+            reassignedAt: new Date().toISOString()
+          };
+          // Replace the reviewer
           updatedReviewers[reviewerIndex] = {
             ...updatedReviewers[reviewerIndex],
             id: newReviewer.id,
             name: newReviewer.name,
-            status: 'In Progress', // Reset status for new reviewer
-            due_date: dueDateToUse // Use new due date
+            status: 'In Progress',
+            due_date: dueDateToUse
           };
         }
-      } 
-      // Handle protocols with single reviewer field - convert to reviewers array
-      else if (protocolData.reviewer) {
-        // Create a reviewers array with the new reviewer
+      } else if (protocolData.reviewer) {
+        previousReviewerInfo = {
+          id: protocolData.reviewer,
+          name: protocolData.reviewer,
+          due_date: protocolData.due_date,
+          reassignedAt: new Date().toISOString()
+        };
         updatedReviewers = [{
           id: newReviewer.id,
           name: newReviewer.name,
@@ -524,15 +389,15 @@ export default function DueDateMonitorPage() {
           due_date: dueDateToUse
         }];
       }
-      
-      // Update the document
+      // Update the document with reassignment_history
       await updateDoc(protocolRef, {
         reviewers: updatedReviewers,
-        updated_at: new Date().toISOString()
+        updated_at: new Date().toISOString(),
+        reassignment_history: previousReviewerInfo
+          ? (protocolData.reassignment_history ? [...protocolData.reassignment_history, previousReviewerInfo] : [previousReviewerInfo])
+          : protocolData.reassignment_history || []
       });
-      
-      // Update local state
-      setProtocols(prevProtocols => 
+      setProtocols(prevProtocols =>
         prevProtocols.map(p => {
           if (p.id === protocolId) {
             return {
@@ -543,11 +408,7 @@ export default function DueDateMonitorPage() {
           return p;
         })
       );
-      
-      // Show success message
       showNotification('success', 'Success', `Reviewer reassigned successfully with due date: ${formatDate(dueDateToUse)}`);
-      
-      // Close the modal
       setReassignModalOpen(false);
       setReassignmentData(null);
     } catch (error) {
@@ -575,141 +436,21 @@ export default function DueDateMonitorPage() {
     }
   };
 
-  // Add a function to handle bulk reassignment
-  const handleBulkReassign = async (newReviewerId: string) => {
-    if (selectedProtocols.length === 0 || !newReviewerId) {
-      showNotification('error', 'Error', 'No protocols selected or missing new reviewer');
-      return;
-    }
-
-    try {
-      setBulkReassignmentLoading(true);
-      
-      // Process each selected protocol
-      for (const protocolId of selectedProtocols) {
-        const protocol = protocols.find(p => p.id === protocolId);
-        
-        if (!protocol) continue;
-        
-        // Get the document reference using the protocol path
-        let protocolRef;
-        if (protocol._path) {
-          const pathParts = protocol._path.split('/');
-          if (pathParts.length === 3) {
-            const [month, week, id] = pathParts;
-            protocolRef = doc(db, 'protocols', month, week, id);
-          } else {
-            console.error(`Invalid path format for protocol: ${protocol.id}`);
-            continue; // Skip this protocol and continue with others
+  // Analytics: Reviewers Who Lost Reviews
+  const lostReviewersMap: Record<string, { name: string; count: number }> = {};
+  protocols.forEach(protocol => {
+    if (protocol.reassignment_history && Array.isArray(protocol.reassignment_history)) {
+      protocol.reassignment_history.forEach((entry: any) => {
+        if (entry && entry.id && entry.name) {
+          if (!lostReviewersMap[entry.id]) {
+            lostReviewersMap[entry.id] = { name: entry.name, count: 0 };
           }
-        } else {
-          console.error(`Missing path information for protocol: ${protocol.id}`);
-          continue; // Skip protocols without path information
+          lostReviewersMap[entry.id].count++;
         }
-        
-        // Get the current protocol data
-        const protocolDoc = await getDoc(protocolRef);
-        
-        if (!protocolDoc.exists()) {
-          console.error(`Protocol ${protocolId} not found`);
-          continue;
-        }
-        
-        const protocolData = protocolDoc.data() as Protocol;
-        
-        // Find the new reviewer details
-        const newReviewer = reviewerList.find(r => r.id === newReviewerId);
-        
-        if (!newReviewer) {
-          console.error('New reviewer not found');
-          continue;
-        }
-        
-        // Update the reviewers array with the new assignment
-        let updatedReviewers: Reviewer[] = [];
-        
-        if (protocolData.reviewers && protocolData.reviewers.length > 0) {
-          // Replace all reviewers that are not completed
-          updatedReviewers = protocolData.reviewers.map(reviewer => {
-            if (reviewer.status !== 'Completed') {
-              return {
-                id: newReviewerId,
-                name: newReviewer.name,
-                status: 'In Progress',
-                document_type: reviewer.document_type
-              };
-            }
-            return reviewer;
-          });
-        } else if (protocolData.reviewer) {
-          // Handle single reviewer case - convert to reviewers array
-          updatedReviewers = [{
-            id: newReviewerId,
-            name: newReviewer.name,
-            status: 'In Progress',
-            document_type: protocolData.document_type
-          }];
-        }
-        
-        // Update the protocol document
-        await updateDoc(protocolRef, {
-          reviewers: updatedReviewers,
-          // Remove the single reviewer field if it exists
-          reviewer: null,
-          // Update the last_updated timestamp
-          last_updated: new Date().toISOString()
-        });
-      }
-      
-      // Refresh the protocols list
-      window.location.reload();
-      
-      // Show success message
-      showNotification(
-        'success',
-        'Protocols Reassigned',
-        `Successfully reassigned ${selectedProtocols.length} protocols to ${reviewerList.find(r => r.id === newReviewerId)?.name}`
-      );
-      
-      // Reset selection
-      setSelectedProtocols([]);
-      setBulkReassignModalOpen(false);
-    } catch (error) {
-      console.error('Error in bulk reassignment:', error);
-      showNotification(
-        'error',
-        'Reassignment Failed',
-        'There was an error reassigning the protocols. Please try again.'
-      );
-    } finally {
-      setBulkReassignmentLoading(false);
+      });
     }
-  };
-  
-  // Add a function to toggle protocol selection
-  const toggleProtocolSelection = (protocolId: string) => {
-    setSelectedProtocols(prev => {
-      if (prev.includes(protocolId)) {
-        return prev.filter(id => id !== protocolId);
-      } else {
-        return [...prev, protocolId];
-      }
-    });
-  };
-  
-  // Add function to select all filteredProtocols that are overdue
-  const selectAllOverdue = () => {
-    const overdueIds = filteredProtocols
-      .filter(p => isOverdue(p.due_date) && p.status !== 'Completed')
-      .map(p => p.id);
-    
-    setSelectedProtocols(overdueIds);
-  };
-  
-  // Add function to clear selection
-  const clearSelection = () => {
-    setSelectedProtocols([]);
-  };
+  });
+  const lostReviewers = Object.values(lostReviewersMap).sort((a, b) => b.count - a.count);
 
   if (loading) {
     return (
@@ -724,280 +465,50 @@ export default function DueDateMonitorPage() {
   return (
     <div className="p-6 max-w-7xl mx-auto">
       <div className="mb-6">
-        <h1 className="text-2xl font-bold mb-2">Due Date Management</h1>
+        <h1 className="text-2xl font-bold mb-2">Overdue Reviewers</h1>
         <p className="text-gray-600">
-          Monitor and manage protocol due dates. Reassign overdue protocols to new reviewers.
+          List of all reviewers who are overdue. You can reassign them to another reviewer.
         </p>
       </div>
-
-      {/* Status Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-        <ProtocolStatusCard 
-          title="Total Protocols" 
-          count={counts.total} 
-          icon={
-            <svg className="w-8 h-8 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
-            </svg>
-          }
-          color="blue"
-        />
-        <ProtocolStatusCard 
-          title="Completed" 
-          count={counts.completed} 
-          icon={
-            <svg className="w-8 h-8 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path>
-            </svg>
-          }
-          color="green"
-        />
-        <ProtocolStatusCard 
-          title="Overdue" 
-          count={counts.overdue} 
-          icon={
-            <svg className="w-8 h-8 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-            </svg>
-          }
-          color="red"
-        />
-        <ProtocolStatusCard 
-          title="Due Soon" 
-          count={counts.dueSoon} 
-          icon={
-            <svg className="w-8 h-8 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-            </svg>
-          }
-          color="yellow"
-        />
-      </div>
-
-      {/* Filters */}
-      <div className="bg-white p-4 rounded-lg shadow mb-6">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div>
-            <label htmlFor="search" className="block text-sm font-medium text-gray-700 mb-1">
-              Search
-            </label>
-            <input
-              type="text"
-              id="search"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Search by protocol or reviewer name..."
-              className="border border-gray-300 rounded-md w-full p-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-          <div>
-            <label htmlFor="status-filter" className="block text-sm font-medium text-gray-700 mb-1">
-              Status Filter
-            </label>
-            <select
-              id="status-filter"
-              value={selectedFilter}
-              onChange={(e) => setSelectedFilter(e.target.value as 'all' | 'overdue' | 'due-soon')}
-              className="border border-gray-300 rounded-md w-full p-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-              <option value="all">All Protocols</option>
-              <option value="overdue">Overdue</option>
-              <option value="due-soon">Due Soon</option>
-            </select>
-          </div>
-          <div>
-            <label htmlFor="release-filter" className="block text-sm font-medium text-gray-700 mb-1">
-              Release Period
-            </label>
-            <select
-              id="release-filter"
-              value={filterRelease}
-              onChange={(e) => setFilterRelease(e.target.value)}
-              className="border border-gray-300 rounded-md w-full p-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-              <option value="all">All Releases</option>
-              {releaseOptions.map(release => (
-                <option key={release} value={release}>{release}</option>
-              ))}
-            </select>
-          </div>
+      <div className="bg-white rounded-lg shadow-md">
+        <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
+          <h3 className="text-lg font-medium text-gray-900">Overdue Reviewers</h3>
+          <span className="text-blue-600 text-sm">{sortedOverdueReviewers.length} found</span>
         </div>
-      </div>
-
-      {/* Add bulk action controls */}
-      {selectedProtocols.length > 0 && (
-        <div className="flex flex-wrap justify-between items-center mb-4 p-3 bg-blue-50 rounded-md border border-blue-200">
-          <div className="flex items-center">
-            <span className="font-medium">{selectedProtocols.length} protocol(s) selected</span>
-            <button 
-              onClick={clearSelection}
-              className="ml-2 text-sm text-blue-600 hover:text-blue-800"
-            >
-              Clear selection
-            </button>
-          </div>
-          <button
-            onClick={() => setBulkReassignModalOpen(true)}
-            className="bg-blue-600 text-white px-4 py-2 rounded-md text-sm hover:bg-blue-700"
-            disabled={selectedProtocols.length === 0}
-          >
-            Bulk Reassign
-          </button>
-        </div>
-      )}
-
-      {/* Protocols List */}
-      <div className="bg-white rounded-lg shadow overflow-hidden">
-        <div className="px-4 py-5 sm:px-6 border-b border-gray-200">
-          <h3 className="text-lg leading-6 font-medium text-gray-900">
-            Protocol Due Dates
-          </h3>
-          <p className="mt-1 max-w-2xl text-sm text-gray-500">
-            {filteredProtocols.length} protocols found with the current filters
-          </p>
-        </div>
-        {filteredProtocols.length > 0 ? (
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  {/* Add a checkbox column for bulk actions */}
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-10">
-                    {selectedFilter === 'overdue' && (
+        <div className="p-4">
+          {sortedOverdueReviewers.length > 0 ? (
+            <ul className="divide-y divide-gray-200">
+              {sortedOverdueReviewers.map((reviewer, index) => reviewer && (
+                <li key={`${reviewer.protocolId}-${reviewer.reviewerId}-${index}`} className="py-3">
+                  <div className="flex justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-gray-900">{reviewer.spupRecCode}</p>
+                      <p className="text-xs text-gray-500">Reviewer: <span className="font-medium">{reviewer.reviewerName}</span></p>
+                      <p className="text-xs text-gray-500">Due: {formatDate(reviewer.dueDate)}</p>
+                    </div>
+                    <div className="flex flex-col items-end">
+                      <span className="bg-red-100 text-red-800 text-xs px-2 py-1 rounded-full mb-2">Overdue</span>
                       <button
-                        onClick={selectAllOverdue}
-                        className="text-xs text-blue-600 hover:text-blue-800"
+                        onClick={() => {
+                          const protocol = protocols.find(p => p.id === reviewer.protocolId);
+                          if (protocol) {
+                            initiateReassign(protocol, reviewer.reviewerId, reviewer.reviewerName);
+                          }
+                        }}
+                        className="text-blue-600 hover:text-blue-800 text-xs"
                       >
-                        Select All
+                        Reassign
                       </button>
-                    )}
-                  </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    SPUP REC Code
-                  </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Protocol Name
-                  </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Release Period
-                  </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Due Date
-                  </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Status
-                  </th>
-                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {filteredProtocols.map((protocol) => (
-                  <React.Fragment key={protocol.id}>
-                    <tr className="hover:bg-gray-50">
-                      {/* Add checkbox for selection */}
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        {protocol.status !== 'Completed' && (
-                          <input
-                            type="checkbox"
-                            checked={selectedProtocols.includes(protocol.id)}
-                            onChange={() => toggleProtocolSelection(protocol.id)}
-                            className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-                          />
-                        )}
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="text-sm font-medium text-gray-900">{protocol.spup_rec_code || protocol.id}</div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="text-sm font-medium text-gray-900">{protocol.protocol_name || protocol.research_title}</div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="text-sm text-gray-500">{protocol.release_period}</div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="text-sm text-gray-500">{formatDate(getLatestDueDate(protocol))}</div>
-                      </td>
-                      <td className="px-6 py-4">
-                        {getStatusLabel(protocol.status, getLatestDueDate(protocol))}
-                      </td>
-                      <td className="px-6 py-4 text-right text-sm font-medium">
-                        <button
-                          onClick={() => handleExpand(protocol.id)}
-                          className="text-blue-600 hover:text-blue-900 mr-3"
-                        >
-                          {expandedProtocol === protocol.id ? 'Hide Details' : 'View Reviewers'}
-                        </button>
-                      </td>
-                    </tr>
-                    {expandedProtocol === protocol.id && (
-                      <tr className="bg-gray-50">
-                        <td colSpan={5} className="px-6 py-4">
-                          <div className="border rounded-md p-3">
-                            <h4 className="font-medium mb-2">Reviewers</h4>
-                            {protocol.reviewers && protocol.reviewers.length > 0 ? (
-                              <div className="space-y-2">
-                                {protocol.reviewers.map((reviewer, idx) => (
-                                  <div key={idx} className="flex justify-between items-center p-2 bg-white rounded-md">
-                                    <div>
-                                      <p className="font-medium">{reviewer.name}</p>
-                                      <p className="text-xs text-gray-500">
-                                        {getFormTypeName(reviewer.document_type || '')}
-                                      </p>
-                                    </div>
-                                    <div className="flex items-center space-x-2">
-                                      {getStatusLabel(reviewer.status, protocol.due_date)}
-                                      {reviewer.status !== 'Completed' && isOverdue(protocol.due_date) && (
-                                        <button
-                                          onClick={() => initiateReassign(protocol, reviewer.id, reviewer.name)}
-                                          className="text-red-600 hover:text-red-800 font-medium ml-3"
-                                        >
-                                          Reassign
-                                        </button>
-                                      )}
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            ) : (
-                              <div className="flex justify-between items-center p-2 bg-white rounded-md">
-                                <div>
-                                  <p className="font-medium">{protocol.reviewer || 'No reviewer assigned'}</p>
-                                  <p className="text-xs text-gray-500">
-                                    {getFormTypeName(protocol.document_type || '')}
-                                  </p>
-                                </div>
-                                <div className="flex items-center space-x-2">
-                                  {getStatusLabel(protocol.status, protocol.due_date)}
-                                  {protocol.status !== 'Completed' && isOverdue(protocol.due_date) && protocol.reviewer && (
-                                    <button
-                                      onClick={() => initiateReassign(protocol, protocol.reviewer || '', protocol.reviewer || '')}
-                                      className="text-red-600 hover:text-red-800 font-medium ml-3"
-                                    >
-                                      Reassign
-                                    </button>
-                                  )}
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    )}
-                  </React.Fragment>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <div className="p-8 text-center text-gray-500">
-            No protocols found matching the current filters.
-          </div>
-        )}
+                    </div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-center py-4 text-gray-500">No overdue reviewers.</p>
+          )}
+        </div>
       </div>
-
-      {/* Single Reviewer Reassignment Modal */}
       <ReassignmentModal
         isOpen={reassignModalOpen}
         protocolName={reassignmentData?.protocolName || ''}
@@ -1007,74 +518,20 @@ export default function DueDateMonitorPage() {
         onCancel={() => setReassignModalOpen(false)}
         onReassign={handleReassign}
       />
-
-      {/* Bulk Reassignment Modal */}
-      {bulkReassignModalOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 w-full max-w-md">
-            <h3 className="text-lg font-bold mb-4">Bulk Reassign Protocols</h3>
-            
-            <div className="mb-4">
-              <p className="text-sm text-gray-600 mb-2">
-                You are reassigning {selectedProtocols.length} protocols to a new reviewer.
-              </p>
-              <p className="text-sm text-gray-600 mb-4">
-                Only reviewers that are not completed will be reassigned.
-              </p>
-            </div>
-            
-            <div className="mb-6">
-              <label htmlFor="bulk-new-reviewer" className="block text-sm font-medium text-gray-700 mb-1">
-                Select New Reviewer
-              </label>
-              <select
-                id="bulk-new-reviewer"
-                value={bulkNewReviewer}
-                onChange={(e) => setBulkNewReviewer(e.target.value)}
-                className="w-full border border-gray-300 rounded-md py-2 px-3 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                disabled={bulkReassignmentLoading}
-              >
-                <option value="">Select a reviewer</option>
-                {reviewerList.map(reviewer => (
-                  <option key={reviewer.id} value={reviewer.id}>
-                    {reviewer.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            
-            <div className="flex justify-end space-x-3">
-              <button
-                type="button"
-                onClick={() => setBulkReassignModalOpen(false)}
-                className="py-2 px-4 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                disabled={bulkReassignmentLoading}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={() => handleBulkReassign(bulkNewReviewer)}
-                className="py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                disabled={bulkReassignmentLoading || !bulkNewReviewer}
-              >
-                {bulkReassignmentLoading ? (
-                  <span className="flex items-center">
-                    <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                    Processing...
-                  </span>
-                ) : (
-                  'Reassign All Selected'
-                )}
-              </button>
-            </div>
-          </div>
+      {/* Analytics: Reviewers Who Lost Reviews */}
+      {lostReviewers.length > 0 && (
+        <div className="bg-white rounded-lg shadow p-6 my-8">
+          <h2 className="text-xl font-bold mb-4">Reviewers Who Lost Reviews</h2>
+          <ul className="divide-y divide-gray-200">
+            {lostReviewers.map((reviewer, idx) => (
+              <li key={idx} className="py-2 flex justify-between items-center">
+                <span className="text-sm font-medium text-gray-900">{reviewer.name}</span>
+                <span className="text-sm text-red-600 font-semibold">{reviewer.count} lost</span>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
-
     </div>
   );
 } 

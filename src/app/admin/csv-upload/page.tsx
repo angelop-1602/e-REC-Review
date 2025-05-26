@@ -6,7 +6,7 @@
 
 'use client';
 
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { setDoc, doc, collection, getDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebaseconfig';
 import Papa from 'papaparse';
@@ -45,17 +45,22 @@ export default function CSVUploader() {
     return `${date.toLocaleString('default', { month: 'long' })}${date.getFullYear()}`;
   });
   const [selectedWeek, setSelectedWeek] = useState('week-1');
+  const [previewData, setPreviewData] = useState<Protocol[]>([]);
 
   const reviewerCache = new Map<string, string>();
 
-const fetchReviewerName = async (id: string): Promise<string> => {
-  if (reviewerCache.has(id)) return reviewerCache.get(id)!;
-  const snap = await getDoc(doc(db, 'reviewers', id));
-  const name = snap.exists() ? snap.data().name || id : id;
-  if (!snap.exists()) console.warn(`Reviewer not found for ID: ${id}`);
-  reviewerCache.set(id, name);
-  return name;
-};
+  useEffect(() => {
+    setPreviewData(processedData);
+  }, [processedData]);
+
+  const fetchReviewerName = async (id: string): Promise<string> => {
+    if (reviewerCache.has(id)) return reviewerCache.get(id)!;
+    const snap = await getDoc(doc(db, 'reviewers', id));
+    const name = snap.exists() ? snap.data().name || id : id;
+    if (!snap.exists()) console.warn(`Reviewer not found for ID: ${id}`);
+    reviewerCache.set(id, name);
+    return name;
+  };
 
   const processData = async (data: CSVRow[]) => {
     const processed: Protocol[] = [];
@@ -70,7 +75,6 @@ const fetchReviewerName = async (id: string): Promise<string> => {
         if (reviewerCode) {
           const name = await fetchReviewerName(reviewerCode);
           reviewers.push({ id: reviewerCode, name, form_type: header, status: 'In Progress', due_date: currentDueDate });
-// reviewers.push({ id, name, ... }) is now corrected to use the real Firestore ID as `id`
         }
       }
 
@@ -99,7 +103,6 @@ const fetchReviewerName = async (id: string): Promise<string> => {
     });
     setRows(parsed);
     await processData(parsed);
-    // e.currentTarget.innerText = '' // Removed to avoid TypeError; // Clear pasted content visually
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -139,7 +142,7 @@ const fetchReviewerName = async (id: string): Promise<string> => {
     <div className="p-6 max-w-6xl mx-auto">
       <h1 className="text-2xl font-bold mb-4 text-blue-800">CSV Upload with Reviewer Mapping</h1>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">Month</label>
           <input className="border rounded-md p-2 w-full focus:ring-blue-500 focus:border-blue-500" type="text" value={selectedMonth} onChange={e => setSelectedMonth(e.target.value)} placeholder="Month" />
@@ -149,6 +152,15 @@ const fetchReviewerName = async (id: string): Promise<string> => {
           <select className="border rounded-md p-2 w-full focus:ring-blue-500 focus:border-blue-500" value={selectedWeek} onChange={e => setSelectedWeek(e.target.value)}>
             {[1, 2, 3, 4, 5].map(i => <option key={i} value={`week-${i}`}>Week {i}</option>)}
           </select>
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Due Date</label>
+          <input 
+            type="date" 
+            className="border rounded-md p-2 w-full focus:ring-blue-500 focus:border-blue-500"
+            value={dueDate}
+            onChange={e => setDueDate(e.target.value)}
+          />
         </div>
       </div>
 
@@ -199,8 +211,8 @@ const fetchReviewerName = async (id: string): Promise<string> => {
 
       <div className="mt-8">
         <h2 className="text-lg font-bold mb-3 text-blue-800">Preview Parsed Protocols</h2>
-        {processedData.length === 0 && <p className="text-gray-400 text-sm">No data parsed yet.</p>}
-        {processedData.slice(0, 5).map((p, idx) => (
+        {previewData.length === 0 && <p className="text-gray-400 text-sm">No data parsed yet.</p>}
+        {previewData.slice(0, 5).map((p, idx) => (
           <div key={idx} className="border p-3 mb-3 rounded bg-gray-50 text-xs">
             <pre>{JSON.stringify(p, null, 2)}</pre>
           </div>
