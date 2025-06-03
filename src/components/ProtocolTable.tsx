@@ -65,7 +65,7 @@ export default function ProtocolTable({
     // Get active (non-completed) reviewers
     const activeReviewers = protocol.reviewers.filter(r => r.status !== 'Completed');
     if (activeReviewers.length === 0) {
-      return <span className="text-green-600">{formatDate(protocol.due_date)} (Completed)</span>;
+      return <span className="text-green-600">{formatDate(protocol.due_date)}</span>;
     }
 
     // Check for overdue reviewers
