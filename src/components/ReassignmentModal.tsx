@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { doc, updateDoc, setDoc, Timestamp, collection } from 'firebase/firestore';
 import { db } from '@/lib/firebaseconfig';
 import { formatDate } from '@/lib/utils';
@@ -9,6 +9,7 @@ interface Reviewer {
   form_type?: string;
   status?: string;
   due_date?: string;
+  completed_at?: Timestamp | null;
 }
 
 interface Protocol {
@@ -43,11 +44,35 @@ export default function ReassignmentModal({
   const [selectedReviewer, setSelectedReviewer] = useState('');
   const [newDueDate, setNewDueDate] = useState(protocol?.due_date || '');
   const [error, setError] = useState<string | null>(null);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [status, setStatus] = useState(currentReviewer.status || 'In Progress');
+  const searchRef = useRef<HTMLDivElement>(null);
   
-  
+  // Filter reviewers based on search term
+  const filteredReviewers = reviewerList.filter(reviewer => 
+    reviewer.name.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  // Handle click outside to close suggestions
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (searchRef.current && !searchRef.current.contains(event.target as Node)) {
+        setShowSuggestions(false);
+      }
+    }
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
+
   useEffect(() => {
     if (isOpen && (currentReviewer.due_date || protocol.due_date)) {
       setSelectedReviewer('');
+      setSearchTerm('');
+      setStatus(currentReviewer.status || 'In Progress');
       // Calculate new due date (2 weeks from original)
       try {
         const originalDueDate = currentReviewer.due_date || protocol.due_date;
@@ -75,9 +100,9 @@ export default function ReassignmentModal({
       }
       setError(null);
     }
-  }, [isOpen, protocol?.due_date, currentReviewer?.due_date]);
+  }, [isOpen, protocol?.due_date, currentReviewer?.due_date, currentReviewer?.status]);
 
-  // Reset newDueDate when reviewer changes (if you want to recalculate based on the new reviewer)
+  // Reset newDueDate when reviewer changes
   useEffect(() => {
     if (selectedReviewer) {
       const reviewer = reviewerList.find(r => r.id === selectedReviewer);
@@ -102,7 +127,8 @@ export default function ReassignmentModal({
       selectedReviewer,
       protocol,
       currentReviewer,
-      newDueDate
+      newDueDate,
+      status
     });
 
     if (!selectedReviewer || !protocol || !currentReviewer) {
@@ -115,11 +141,13 @@ export default function ReassignmentModal({
       return;
     }
 
-    // Validate due date format
-    if (!newDueDate || !/^\d{4}-\d{2}-\d{2}$/.test(newDueDate)) {
-      console.error('Invalid due date format:', newDueDate);
-      setError('Invalid due date format');
-      return;
+    // Validate due date format only if status is In Progress
+    if (status === 'In Progress') {
+      if (!newDueDate || !/^\d{4}-\d{2}-\d{2}$/.test(newDueDate)) {
+        console.error('Invalid due date format:', newDueDate);
+        setError('Due date is required for In Progress status');
+        return;
+      }
     }
 
     try {
@@ -137,10 +165,6 @@ export default function ReassignmentModal({
       // Validate required fields
       if (!newReviewerInfo.id || !newReviewerInfo.name) {
         throw new Error('New reviewer information is incomplete');
-      }
-
-      if (!newDueDate) {
-        throw new Error('Due date is required');
       }
 
       // Determine the correct protocol document reference
@@ -163,8 +187,9 @@ export default function ReassignmentModal({
         id: newReviewerInfo.id || '',
         name: newReviewerInfo.name || '',
         form_type: currentReviewer.form_type || '',
-        status: 'In Progress',
-        due_date: newDueDate || ''
+        status: status,
+        due_date: status === 'In Progress' ? newDueDate : '',
+        completed_at: status === 'Completed' ? Timestamp.now() : undefined
       };
 
       console.log('Created new reviewer object:', newReviewer);
@@ -178,7 +203,9 @@ export default function ReassignmentModal({
         from: currentReviewer.name,
         to: newReviewerInfo.name,
         date: timestamp,
-        type: 'reassignment'
+        type: 'reassignment',
+        status: status,
+        completed_at: status === 'Completed' ? timestamp : undefined
       };
 
       console.log('Created audit entry:', auditEntry);
@@ -198,113 +225,38 @@ export default function ReassignmentModal({
           throw new Error('Protocol path information missing');
         }
 
-        console.log('Creating audit in subcollection at path:', `${protocolPath}/audits/${auditId}`);
-        
-        // Create the audit document in the subcollection
-        const auditRef = doc(db, protocolPath, 'audits', auditId);
+        const auditRef = doc(collection(db, `${protocolPath}/audits`), auditId);
         await setDoc(auditRef, auditEntry);
-        console.log('Successfully created audit document in subcollection');
-      } catch (err) {
-        console.error('Error creating audit document:', err);
-        throw new Error('Failed to create audit document');
-      }
+        console.log('Audit entry created successfully');
 
-      // Update protocol with new reviewer
-      if (protocol.reviewers && protocol.reviewers.length > 0) {
-        const updatedReviewers = protocol.reviewers.map(r => 
-          r.id === currentReviewer.id ? {
-            ...r,  // Keep all existing reviewer properties
-            id: newReviewerInfo.id,
-            name: newReviewerInfo.name,
-            due_date: newDueDate
-          } : r
-        );
-        
-        console.log('Updating protocol with reviewers array:', updatedReviewers);
-        
-        const updateData: {
-          reviewers: Reviewer[];
-          last_audit_id: string;
-          last_audit_date: typeof timestamp;
-          updated_at: typeof timestamp;
-          last_reviewer: string;
-          [key: string]: any;
-        } = {
+        // Update only the selected reviewer in the reviewers array
+        const updatedReviewers = protocol.reviewers?.map(reviewer => 
+          reviewer.id === currentReviewer.id ? newReviewer : reviewer
+        ) || [newReviewer];
+
+        // Update the protocol with the updated reviewers array
+        await updateDoc(protocolRef, {
           reviewers: updatedReviewers,
-          last_audit_id: auditId,
-          last_audit_date: timestamp,
-          updated_at: timestamp,
-          last_reviewer: currentReviewer.name || ''
-        };
-
-        // Log each field before update
-        console.log('Update data before cleanup:', JSON.stringify(updateData, null, 2));
-        
-        // Remove any undefined values and log which ones were removed
-        Object.keys(updateData).forEach(key => {
-          if (updateData[key] === undefined) {
-            console.log(`Removing undefined field: ${key}`);
-            delete updateData[key];
-          }
+          updated_at: timestamp
         });
-        
-        // Log final update data
-        console.log('Final update data:', JSON.stringify(updateData, null, 2));
-        
-        await updateDoc(protocolRef, updateData);
-      } else {
-        console.log('Updating legacy protocol');
-        const updateData: {
-          reviewer: string;
-          due_date: string;
-          reviewers: Reviewer[];
-          last_audit_id: string;
-          last_audit_date: typeof timestamp;
-          updated_at: typeof timestamp;
-          last_reviewer: string;
-          [key: string]: any;
-        } = {
-          reviewer: newReviewerInfo.name || '',
-          due_date: newDueDate || '',
-          reviewers: [{
-            id: newReviewerInfo.id,
-            name: newReviewerInfo.name,
-            status: 'In Progress',
-            due_date: newDueDate,
-            form_type: protocol.form_type || ''
-          }],
-          last_audit_id: auditId,
-          last_audit_date: timestamp,
-          updated_at: timestamp,
-          last_reviewer: currentReviewer.name || ''
-        };
 
-        // Log each field before update
-        console.log('Update data before cleanup:', JSON.stringify(updateData, null, 2));
-        
-        // Remove any undefined values and log which ones were removed
-        Object.keys(updateData).forEach(key => {
-          if (updateData[key] === undefined) {
-            console.log(`Removing undefined field: ${key}`);
-            delete updateData[key];
-          }
+        console.log('Protocol updated successfully');
+
+        // Call onSuccess with the new reviewer info
+        onSuccess({
+          id: newReviewerInfo.id,
+          name: newReviewerInfo.name,
+          due_date: newDueDate
         });
-        
-        // Log final update data
-        console.log('Final update data:', JSON.stringify(updateData, null, 2));
-        
-        await updateDoc(protocolRef, updateData);
+
+      } catch (err) {
+        console.error('Error updating protocol:', err);
+        throw new Error('Failed to update protocol');
       }
 
-      console.log('Protocol updated successfully');
-      onSuccess({
-        id: newReviewerInfo.id,
-        name: newReviewerInfo.name,
-        due_date: newDueDate
-      });
     } catch (err) {
-      console.error('Error during reassignment:', err);
-      setError(err instanceof Error ? err.message : 'Failed to reassign reviewer. Please try again.');
+      console.error('Error in handleSubmit:', err);
+      setError(err instanceof Error ? err.message : 'An error occurred');
     }
   };
 
@@ -324,73 +276,105 @@ export default function ReassignmentModal({
         </div>
         
         <form onSubmit={handleSubmit}>
-        <div className="mb-4">
+          <div className="mb-4" ref={searchRef}>
             <label htmlFor="reviewer" className="block text-sm font-medium text-gray-700 mb-1">
-            Select New Reviewer
-          </label>
-          <select
-              id="reviewer"
-            value={selectedReviewer}
-              onChange={(e) => {
-                console.log('Reviewer selected:', e.target.value);
-                setSelectedReviewer(e.target.value);
-              }}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-              required
-          >
-            <option value="">Select a reviewer</option>
-              {reviewerList.map((reviewer) => (
-                <option key={reviewer.id} value={reviewer.id}>
-                  {reviewer.name}
-                </option>
-              ))}
-          </select>
-        </div>
-        
-          <div className="mb-4">
-            <label htmlFor="dueDate" className="block text-sm font-medium text-gray-700 mb-1">
-              New Due Date
+              Select New Reviewer
             </label>
-          <input
-            type="date"
-              id="dueDate"
-              value={newDueDate || ''}
+            <div className="relative">
+              <input
+                type="text"
+                id="reviewer"
+                value={searchTerm}
+                onChange={(e) => {
+                  setSearchTerm(e.target.value);
+                  setShowSuggestions(true);
+                }}
+                onFocus={() => setShowSuggestions(true)}
+                placeholder="Search for a reviewer..."
+                className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+              />
+              {showSuggestions && filteredReviewers.length > 0 && (
+                <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-md shadow-lg max-h-60 overflow-auto">
+                  {filteredReviewers.map((reviewer) => (
+                    <div
+                      key={reviewer.id}
+                      className="px-4 py-2 hover:bg-blue-50 cursor-pointer"
+                      onClick={() => {
+                        setSelectedReviewer(reviewer.id);
+                        setSearchTerm(reviewer.name);
+                        setShowSuggestions(false);
+                      }}
+                    >
+                      {reviewer.name}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="mb-4">
+            <label htmlFor="status" className="block text-sm font-medium text-gray-700 mb-1">
+              Status
+            </label>
+            <select
+              id="status"
+              value={status}
               onChange={(e) => {
-                console.log('Due date changed:', e.target.value);
-                setNewDueDate(e.target.value);
+                setStatus(e.target.value);
+                if (e.target.value === 'Completed') {
+                  setNewDueDate('');
+                }
               }}
               className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-              required
-            />
-            <p className="mt-1 text-sm text-gray-500">
-              Original due date: {formatDate(currentReviewer.due_date || protocol.due_date)}
-          </p>
-        </div>
+            >
+              <option value="In Progress">In Progress</option>
+              <option value="Completed">Completed</option>
+            </select>
+          </div>
 
-          {error && (
-            <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-md">
-              <p className="text-sm text-red-600">{error}</p>
+          {status === 'In Progress' && (
+            <div className="mb-4">
+              <label htmlFor="dueDate" className="block text-sm font-medium text-gray-700 mb-1">
+                New Due Date
+              </label>
+              <input
+                type="date"
+                id="dueDate"
+                value={newDueDate}
+                onChange={(e) => setNewDueDate(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                required={status === 'In Progress'}
+              />
             </div>
           )}
-        
-        <div className="flex justify-end space-x-3">
-          <button
-            type="button"
-            onClick={onCancel}
+
+          {error && (
+            <div className="mb-4 p-2 bg-red-100 border border-red-400 text-red-700 rounded">
+              {error}
+            </div>
+          )}
+
+          <div className="flex justify-end space-x-3">
+            <button
+              type="button"
+              onClick={onCancel}
               className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-            disabled={loading}
-          >
-            Cancel
-          </button>
-          <button
+            >
+              Cancel
+            </button>
+            <button
               type="submit"
-              className="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-            disabled={loading || !selectedReviewer}
-              onClick={() => console.log('Reassign button clicked')}
+              disabled={loading || !selectedReviewer}
+              className={`px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white ${
+                loading || !selectedReviewer
+                  ? 'bg-blue-300 cursor-not-allowed'
+                  : 'bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500'
+              }`}
             >
               {loading ? 'Reassigning...' : 'Reassign'}
-          </button>
-        </div>
+            </button>
+          </div>
         </form>
       </div>
     </div>
