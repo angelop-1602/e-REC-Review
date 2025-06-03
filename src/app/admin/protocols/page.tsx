@@ -279,6 +279,19 @@ export default function ProtocolsPage() {
       const uniqueAcademic = new Set<string>();
       const uniqueReviewers = new Map<string, {id: string; name: string}>();
       
+      // First, fetch all reviewers from the reviewers collection
+      const reviewersRef = collection(db, 'reviewers');
+      const reviewersSnap = await getDocs(reviewersRef);
+      reviewersSnap.forEach((doc) => {
+        const reviewer = { id: doc.id, ...doc.data() } as Reviewer;
+        if (reviewer.id && reviewer.name) {
+          uniqueReviewers.set(reviewer.id, {
+            id: reviewer.id,
+            name: reviewer.name
+          });
+        }
+      });
+      
       // Query the new hierarchical structure
       console.log('Fetching protocols from Firebase...');
       
