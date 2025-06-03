@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { formatDate, getFormTypeName, isOverdue, isDueSoon, getReviewerFormType } from '@/lib/utils';
-import { doc, collection, getDocs, query, where, orderBy, getDoc } from 'firebase/firestore';
+import { doc, collection, getDocs, query, where, orderBy, getDoc, Timestamp } from 'firebase/firestore';
 import { db } from '@/lib/firebaseconfig';
 import ReassignmentModal from './ReassignmentModal';
 
@@ -10,7 +10,7 @@ interface Reviewer {
   status: string;
   form_type?: string;
   due_date?: string;
-  completed_at?: string;
+  completed_at?: Timestamp | null;
 }
 
 interface Protocol {
@@ -242,7 +242,8 @@ export default function ProtocolDetailsModal({
   function getLatestCompletedDate(reviewers: Reviewer[]): string | null {
     const completedDates = reviewers
       .filter(r => r.status === 'Completed' && r.completed_at)
-      .map(r => r.completed_at as string)
+      .map(r => r.completed_at instanceof Timestamp ? r.completed_at.toDate().toISOString() : null)
+      .filter((date): date is string => date !== null)
       .sort((a, b) => (a > b ? -1 : 1)); // Sort descending
     return completedDates.length > 0 ? completedDates[0] : null;
   }
@@ -342,12 +343,19 @@ export default function ProtocolDetailsModal({
                 <tbody className="divide-y divide-gray-200">
                   {localProtocol.reviewers.map((reviewer, index) => {
                     const formInfo = getReviewerFormType(localProtocol, reviewer.id, reviewer.name);
+                    const completedDate = reviewer.completed_at instanceof Timestamp 
+                      ? reviewer.completed_at.toDate().toISOString()
+                      : null;
                     return (
                     <tr key={index} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
                         <td className="px-4 py-3 text-sm font-medium text-gray-900">{reviewer.name}</td>
                         <td className="px-4 py-3 text-sm text-gray-700">{formInfo.formName || 'N/A'}</td>
                         <td className="px-4 py-3 text-sm">{getReviewerStatusBadge(reviewer.status, reviewer.due_date || localProtocol.due_date)}</td>
-                        <td className="px-4 py-3 text-sm text-gray-700">{formatDate(reviewer.due_date || localProtocol.due_date)}</td>
+                        <td className="px-4 py-3 text-sm text-gray-700">
+                          {reviewer.status === 'Completed' && completedDate
+                            ? `Completed: ${formatDate(completedDate)}`
+                            : formatDate(reviewer.due_date || localProtocol.due_date)}
+                        </td>
                         <td className="px-4 py-3 text-sm">
                           {reviewer.status !== 'Completed' && onReassign && (
                           <button
