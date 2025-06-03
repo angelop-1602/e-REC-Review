@@ -10,7 +10,6 @@ export default function AdminNav() {
   const navLinks = [
     { name: 'Dashboard', href: '/admin/dashboard' },
     { name: 'Protocols', href: '/admin/protocols' },
-    { name: 'Due Dates', href: '/admin/due-dates' },
     { name: 'CSV Upload', href: '/admin/csv-upload' },
     { name: 'Reviewers', href: '/admin/reviewers' },
     { name: 'Notices', href: '/admin/notices' },

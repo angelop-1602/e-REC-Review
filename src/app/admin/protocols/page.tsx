@@ -65,6 +65,7 @@ export default function ProtocolsPage() {
     reviewerName: string;
     loading: boolean;
     currentDueDate: string;
+    formType: string;
   } | null>(null);
   const [notification, setNotification] = useState<{
     isOpen: boolean;
@@ -268,283 +269,220 @@ export default function ProtocolsPage() {
     return getDueDateInfo(protocol).date;
   };
 
-  useEffect(() => {
-    const fetchProtocols = async () => {
+  const fetchProtocols = async () => {
+    try {
+      setLoading(true);
+      
+      // Initialize array to hold all protocols
+      const fetchedProtocols: Protocol[] = [];
+      const uniqueReleases = new Set<string>();
+      const uniqueAcademic = new Set<string>();
+      const uniqueReviewers = new Map<string, {id: string; name: string}>();
+      
+      // Query the new hierarchical structure
+      console.log('Fetching protocols from Firebase...');
+      
+      // First, attempt to use collectionGroup query for most efficient retrieval
       try {
-        setLoading(true);
+        console.log("Attempting collectionGroup query...");
         
-        // Initialize array to hold all protocols
-        const fetchedProtocols: Protocol[] = [];
-        const uniqueReleases = new Set<string>();
-        const uniqueAcademic = new Set<string>();
-        const uniqueReviewers = new Map<string, {id: string; name: string}>();
-        
-        // Query the new hierarchical structure
-        console.log('Fetching protocols from Firebase...');
-        
-        // First, attempt to use collectionGroup query for most efficient retrieval
-        try {
-          console.log("Attempting collectionGroup query...");
+        // Use collection group queries to get all protocol documents across all subcollections
+        // For each potential week collection (week-1, week-2, etc.)
+        for (let weekNum = 1; weekNum <= 4; weekNum++) {
+          const weekCollection = `week-${weekNum}`;
+          console.log(`Querying collection group: ${weekCollection}`);
+          const protocolsGroupQuery = query(collectionGroup(db, weekCollection));
+          const protocolsGroupSnapshot = await getDocs(protocolsGroupQuery);
           
-          // Use collection group queries to get all protocol documents across all subcollections
-          // For each potential week collection (week-1, week-2, etc.)
-          for (let weekNum = 1; weekNum <= 4; weekNum++) {
-            const weekCollection = `week-${weekNum}`;
-            console.log(`Querying collection group: ${weekCollection}`);
-            const protocolsGroupQuery = query(collectionGroup(db, weekCollection));
-            const protocolsGroupSnapshot = await getDocs(protocolsGroupQuery);
+          console.log(`Found ${protocolsGroupSnapshot.size} documents in ${weekCollection}`);
+          
+          // Process protocols from the collection group query
+          for (const protocolDoc of protocolsGroupSnapshot.docs) {
+            const data = protocolDoc.data() as Protocol;
+            const path = protocolDoc.ref.path;
             
-            console.log(`Found ${protocolsGroupSnapshot.size} documents in ${weekCollection}`);
-            
-            // Process protocols from the collection group query
-            for (const protocolDoc of protocolsGroupSnapshot.docs) {
-              const data = protocolDoc.data() as Protocol;
-              const path = protocolDoc.ref.path;
-              
-              // Extract the month and week from the path
-              // Path format: "protocols/{month}/{week}/{SPUP_REC_Code}"
-              const pathParts = path.split('/');
-              if (pathParts.length < 4) {
-                console.log(`Invalid path format for protocol: ${path}`);
-                continue;
-              }
-              
-              const monthId = pathParts[1];
-              const weekId = pathParts[2];
-              
-              // Create a mapped protocol that works with our UI
-              const mappedProtocol: Protocol = {
-                ...data,
-                id: protocolDoc.id,
-                // Map new field names to consistent names for the UI
-                protocol_name: data.research_title || '',
-                protocol_file: data.e_link || '',
-                release_period: `${monthId} ${weekId}`,
-                academic_level: data.course_program || '',
-                // Ensure the due date is valid and in the correct format
-                due_date: ensureValidDueDate(data.due_date),
-                // Add missing required fields with defaults if not present in data
-                status: data.status || 'In Progress',
-                created_at: data.created_at || new Date().toISOString(),
-                // Add metadata for tracking
-                _path: `${monthId}/${weekId}/${protocolDoc.id}`
-              };
-              
-              fetchedProtocols.push(mappedProtocol);
-              
-              // Add to our sets of unique values
-              uniqueReleases.add(mappedProtocol.release_period);
-              if (mappedProtocol.academic_level) {
-                uniqueAcademic.add(mappedProtocol.academic_level);
-              }
-              
-              // Extract reviewers for reassignment dropdown
-              if (data.reviewers && data.reviewers.length > 0) {
-                data.reviewers.forEach((reviewer: Reviewer) => {
-                  if (reviewer.id && reviewer.name) {
-                    uniqueReviewers.set(reviewer.id, {
-                      id: reviewer.id,
-                      name: reviewer.name
-                    });
-                  }
-                });
-              }
+            // Extract the month and week from the path
+            // Path format: "protocols/{month}/{week}/{SPUP_REC_Code}"
+            const pathParts = path.split('/');
+            if (pathParts.length < 4) {
+              console.log(`Invalid path format for protocol: ${path}`);
+              continue;
             }
-          }
-        } catch (err) {
-          console.error("CollectionGroup query failed, falling back to hierarchical queries:", err);
-          
-          // Fallback to hierarchical queries if collectionGroup is not set up
-          // First get all month documents
-          const monthsRef = collection(db, 'protocols');
-          console.log(`Fetching months from protocols collection...`);
-          const monthsSnapshot = await getDocs(monthsRef);
-          console.log(`Found ${monthsSnapshot.docs.length} documents in protocols collection`);
-          
-          // For each month, get all weeks
-          for (const monthDoc of monthsSnapshot.docs) {
-            const monthId = monthDoc.id;
-            console.log(`Processing month: ${monthId}`);
             
-            try {
-              // Get weeks within this month
-              const weeksRef = collection(monthDoc.ref, monthId);
-              console.log(`Fetching weeks for month ${monthId}...`);
-              const weeksSnapshot = await getDocs(weeksRef);
-              console.log(`Found ${weeksSnapshot.docs.length} weeks for month ${monthId}`);
-              
-              // For each week, get all protocols
-              for (const weekDoc of weeksSnapshot.docs) {
-                const weekId = weekDoc.id;
-                console.log(`Processing week: ${weekId} in month ${monthId}`);
-                
-                // Get protocols within this week
-                const protocolsRef = collection(weekDoc.ref, weekId);
-                console.log(`Fetching protocols for ${monthId}/${weekId}...`);
-                const protocolsSnapshot = await getDocs(protocolsRef);
-                console.log(`Found ${protocolsSnapshot.docs.length} protocols in ${monthId}/${weekId}`);
-                
-                for (const protocolDoc of protocolsSnapshot.docs) {
-                  const data = protocolDoc.data();
-                  
-                  // Create a mapped protocol that works with our UI
-                  const mappedProtocol: Protocol = {
-                    ...data,
-                    id: protocolDoc.id,
-                    // Map new field names to consistent names for the UI
-                    protocol_name: data.research_title || '',
-                    protocol_file: data.e_link || '',
-                    release_period: `${monthId} ${weekId}`,
-                    academic_level: data.course_program || '',
-                    // Ensure the due date is valid and in the correct format
-                    due_date: ensureValidDueDate(data.due_date),
-                    // Add missing required fields with defaults if not present in data
-                    status: data.status || 'In Progress',
-                    created_at: data.created_at || new Date().toISOString(),
-                    // Add metadata for tracking
-                    _path: `${monthId}/${weekId}/${protocolDoc.id}`
-                  };
-                  
-                  fetchedProtocols.push(mappedProtocol);
-                  
-                  // Add to our sets of unique values
-                  uniqueReleases.add(mappedProtocol.release_period);
-                  if (mappedProtocol.academic_level) {
-                    uniqueAcademic.add(mappedProtocol.academic_level);
-                  }
-                  
-                  // Extract reviewers for reassignment dropdown
-                  if (data.reviewers && data.reviewers.length > 0) {
-                    data.reviewers.forEach((reviewer: Reviewer) => {
-                      if (reviewer.id && reviewer.name) {
-                        uniqueReviewers.set(reviewer.id, {
-                          id: reviewer.id,
-                          name: reviewer.name
-                        });
-                      }
-                    });
-                  }
+            const monthId = pathParts[1];
+            const weekId = pathParts[2];
+            
+            // Create a mapped protocol that works with our UI
+            const mappedProtocol: Protocol = {
+              ...data,
+              id: protocolDoc.id,
+              // Map new field names to consistent names for the UI
+              protocol_name: data.research_title || '',
+              protocol_file: data.e_link || '',
+              release_period: `${monthId} ${weekId}`,
+              academic_level: data.course_program || '',
+              // Ensure the due date is valid and in the correct format
+              due_date: ensureValidDueDate(data.due_date),
+              // Add missing required fields with defaults if not present in data
+              status: data.status || 'In Progress',
+              created_at: data.created_at || new Date().toISOString(),
+              // Add metadata for tracking
+              _path: `${monthId}/${weekId}/${protocolDoc.id}`
+            };
+            
+            fetchedProtocols.push(mappedProtocol);
+            
+            // Add to our sets of unique values
+            uniqueReleases.add(mappedProtocol.release_period);
+            if (mappedProtocol.academic_level) {
+              uniqueAcademic.add(mappedProtocol.academic_level);
+            }
+            
+            // Extract reviewers for reassignment dropdown
+            if (data.reviewers && data.reviewers.length > 0) {
+              data.reviewers.forEach((reviewer: Reviewer) => {
+                if (reviewer.id && reviewer.name) {
+                  uniqueReviewers.set(reviewer.id, {
+                    id: reviewer.id,
+                    name: reviewer.name
+                  });
                 }
-              }
-            } catch (err) {
-              console.error(`Error fetching protocols for month ${monthId}:`, err);
-              // Continue with other months even if one fails
+              });
             }
           }
         }
-        
-        console.log(`Fetched a total of ${fetchedProtocols.length} protocols.`);
-
-        // Process the protocols to create a grouped version with counts
-        const protocolarrayByName: {[key: string]: Protocol[]} = {};
-        fetchedProtocols.forEach(protocol => {
-          const key = protocol.research_title || protocol.protocol_name || 'Unknown';
-          if (!protocolarrayByName[key]) {
-            protocolarrayByName[key] = [];
-          }
-          protocolarrayByName[key].push(protocol);
-        });
-
-        // Create a grouped version of protocols (one entry per protocol_name)
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const processedProtocols = Object.entries(protocolarrayByName).map(([_, items]) => {
-          // Use the first protocol as the base
-          const baseProtocol = { ...items[0] };
-          
-          // Count completed and total reviewers
-          const reviewerCount = items.reduce((count, p) => {
-            if (p.reviewers && p.reviewers.length > 0) {
-              return count + p.reviewers.length;
-            } else if (p.reviewer) {
-              return count + 1;
-            }
-            return count;
-          }, 0);
-          
-          const completedReviewerCount = items.reduce((count, p) => {
-            if (p.reviewers && p.reviewers.length > 0) {
-              return count + p.reviewers.filter(r => r.status === 'Completed').length;
-            } else if (p.status === 'Completed') {
-              return count + 1;
-            }
-            return count;
-          }, 0);
-          
-          // Determine overall status
-          let overallStatus = 'In Progress';
-          if (reviewerCount > 0 && completedReviewerCount === reviewerCount) {
-            overallStatus = 'Completed';
-          } else if (completedReviewerCount > 0) {
-            overallStatus = 'Partially Completed';
-          }
-          
-          return {
-            ...baseProtocol,
-            status: overallStatus,
-            reviewerCount,
-            completedReviewerCount,
-            relatedProtocols: items
-          };
-        });
-
-        // Sort release periods in chronological order, keeping numerical ones first (First, Second, etc.)
-        // then followed by monthly ones (January, February, etc.)
-        const sortedReleases = Array.from(uniqueReleases).sort((a, b) => {
-          const aIsNumerical = /first|second|third|fourth/i.test(a);
-          const bIsNumerical = /first|second|third|fourth/i.test(b);
-          
-          if (aIsNumerical && !bIsNumerical) return -1;
-          if (!aIsNumerical && bIsNumerical) return 1;
-          
-          if (aIsNumerical && bIsNumerical) {
-            const orderMap: {[key: string]: number} = {
-              'first': 1, 'second': 2, 'third': 3, 'fourth': 4
-            };
-            const aOrder = orderMap[a.toLowerCase().split(' ')[0]] || 99;
-            const bOrder = orderMap[b.toLowerCase().split(' ')[0]] || 99;
-            return aOrder - bOrder;
-          }
-          
-          // For monthly releases, sort by month
-          return a.localeCompare(b);
-        });
-        
-        // Group protocols by release period
-        const byReleasePeriod: {[key: string]: Protocol[]} = {};
-        processedProtocols.forEach(protocol => {
-          const releasePeriod = protocol.release_period || 'Unknown';
-          if (!byReleasePeriod[releasePeriod]) {
-            byReleasePeriod[releasePeriod] = [];
-          }
-          byReleasePeriod[releasePeriod].push(protocol);
-        });
-
-        // Update status counts
-        const counts = {
-          total: processedProtocols.length,
-          completed: processedProtocols.filter(p => p.status === 'Completed').length,
-          inProgress: processedProtocols.filter(p => p.status === 'In Progress' || p.status === 'Partially Completed').length,
-          overdue: processedProtocols.filter(p => p.status !== 'Completed' && isOverdue(p.due_date)).length,
-          dueSoon: processedProtocols.filter(p => p.status !== 'Completed' && !isOverdue(p.due_date) && isDueSoon(p.due_date)).length
-        };
-        
-        setProtocols(processedProtocols);
-        setGroupedProtocols(byReleasePeriod);
-        setReleaseOptions(sortedReleases);
-        setAcademicOptions(Array.from(uniqueAcademic).sort());
-        setStatusCounts(counts);
-        setReviewerList(Array.from(uniqueReviewers.values()));
       } catch (err) {
-        console.error("Error fetching protocols:", err);
-        setError("Failed to load protocols");
-      } finally {
-        setLoading(false);
+        console.error("CollectionGroup query failed, falling back to hierarchical queries:", err);
+        
+        // Fallback to hierarchical queries if collectionGroup is not set up
+        // First get all month documents
+        const monthsRef = collection(db, 'protocols');
+        console.log(`Fetching months from protocols collection...`);
+        const monthsSnapshot = await getDocs(monthsRef);
+        console.log(`Found ${monthsSnapshot.docs.length} documents in protocols collection`);
+        
+        // For each month, get all weeks
+        for (const monthDoc of monthsSnapshot.docs) {
+          const monthId = monthDoc.id;
+          console.log(`Processing month: ${monthId}`);
+          
+          try {
+            // Get weeks within this month
+            const weeksRef = collection(monthDoc.ref, monthId);
+            console.log(`Fetching weeks for month ${monthId}...`);
+            const weeksSnapshot = await getDocs(weeksRef);
+            console.log(`Found ${weeksSnapshot.docs.length} weeks for month ${monthId}`);
+            
+            // For each week, get all protocols
+            for (const weekDoc of weeksSnapshot.docs) {
+              const weekId = weekDoc.id;
+              console.log(`Processing week: ${weekId} in month ${monthId}`);
+              
+              // Get protocols within this week
+              const protocolsRef = collection(weekDoc.ref, weekId);
+              console.log(`Fetching protocols for ${monthId}/${weekId}...`);
+              const protocolsSnapshot = await getDocs(protocolsRef);
+              console.log(`Found ${protocolsSnapshot.docs.length} protocols in ${monthId}/${weekId}`);
+              
+              for (const protocolDoc of protocolsSnapshot.docs) {
+                const data = protocolDoc.data();
+                
+                // Create a mapped protocol that works with our UI
+                const mappedProtocol: Protocol = {
+                  ...data,
+                  id: protocolDoc.id,
+                  // Map new field names to consistent names for the UI
+                  protocol_name: data.research_title || '',
+                  protocol_file: data.e_link || '',
+                  release_period: `${monthId} ${weekId}`,
+                  academic_level: data.course_program || '',
+                  // Ensure the due date is valid and in the correct format
+                  due_date: ensureValidDueDate(data.due_date),
+                  // Add missing required fields with defaults if not present in data
+                  status: data.status || 'In Progress',
+                  created_at: data.created_at || new Date().toISOString(),
+                  // Add metadata for tracking
+                  _path: `${monthId}/${weekId}/${protocolDoc.id}`
+                };
+                
+                fetchedProtocols.push(mappedProtocol);
+                
+                // Add to our sets of unique values
+                uniqueReleases.add(mappedProtocol.release_period);
+                if (mappedProtocol.academic_level) {
+                  uniqueAcademic.add(mappedProtocol.academic_level);
+                }
+                
+                // Extract reviewers for reassignment dropdown
+                if (data.reviewers && data.reviewers.length > 0) {
+                  data.reviewers.forEach((reviewer: Reviewer) => {
+                    if (reviewer.id && reviewer.name) {
+                      uniqueReviewers.set(reviewer.id, {
+                        id: reviewer.id,
+                        name: reviewer.name
+                      });
+                    }
+                  });
+                }
+              }
+            }
+          } catch (err) {
+            console.error(`Error fetching protocols for month ${monthId}:`, err);
+            // Continue with other months even if one fails
+          }
+        }
       }
-    };
+      
+      console.log(`Fetched a total of ${fetchedProtocols.length} protocols.`);
 
+      // Process the protocols to create a grouped version with counts
+      const protocolarrayByName: {[key: string]: Protocol[]} = {};
+      fetchedProtocols.forEach(protocol => {
+        const key = protocol.research_title || protocol.protocol_name || 'Unknown';
+        if (!protocolarrayByName[key]) {
+          protocolarrayByName[key] = [];
+        }
+        protocolarrayByName[key].push(protocol);
+      });
+
+      // Create a grouped version of protocols (one entry per protocol_name)
+      const groupedProtocols: {[key: string]: Protocol[]} = {};
+      Object.entries(protocolarrayByName).forEach(([key, protocols]) => {
+        // Sort protocols by release period
+        protocols.sort((a, b) => a.release_period.localeCompare(b.release_period));
+        groupedProtocols[key] = protocols;
+      });
+
+      // Update state with the fetched data
+      setProtocols(fetchedProtocols);
+      setGroupedProtocols(groupedProtocols);
+      setReleaseOptions(Array.from(uniqueReleases).sort());
+      setAcademicOptions(Array.from(uniqueAcademic).sort());
+      setReviewerList(Array.from(uniqueReviewers.values()));
+
+      // Calculate status counts
+      const counts = {
+        total: fetchedProtocols.length,
+        completed: fetchedProtocols.filter(p => p.status === 'Completed').length,
+        inProgress: fetchedProtocols.filter(p => p.status === 'In Progress').length,
+        overdue: fetchedProtocols.filter(p => isOverdue(p.due_date)).length,
+        dueSoon: fetchedProtocols.filter(p => isDueSoon(p.due_date)).length
+      };
+      setStatusCounts(counts);
+
+    } catch (err) {
+      console.error('Error fetching protocols:', err);
+      setError('Failed to load protocols. Please try again later.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
     fetchProtocols();
   }, []);
 
+  // Filter protocols based on all criteria
   const filteredProtocols = protocols.filter((protocol) => {
     const matchesSearch = 
       (protocol.spup_rec_code && protocol.spup_rec_code.toLowerCase().includes(searchTerm.toLowerCase())) ||
@@ -559,45 +497,27 @@ export default function ProtocolsPage() {
     return matchesSearch && matchesStatus && matchesRelease && matchesAcademic;
   });
 
-  // Filter and sort grouped protocols
+  // Group the filtered protocols by release period
   const filteredGroupedProtocols: {[key: string]: Protocol[]} = {};
-  if (filterRelease !== 'all') {
-    if (groupedProtocols[filterRelease]) {
-      filteredGroupedProtocols[filterRelease] = groupedProtocols[filterRelease].filter(protocol => {
-        const matchesSearch = 
-          (protocol.spup_rec_code && protocol.spup_rec_code.toLowerCase().includes(searchTerm.toLowerCase())) ||
-          protocol.id.toLowerCase().includes(searchTerm.toLowerCase());
-        const matchesStatus = filterStatus === 'all' || 
-          protocol.status === filterStatus || 
-          (filterStatus === 'overdue' && isOverdue(protocol.due_date) && protocol.status !== 'Completed') ||
-          (filterStatus === 'due-soon' && isDueSoon(protocol.due_date) && protocol.status !== 'Completed');
-        const matchesAcademic = filterAcademic === 'all' || protocol.academic_level === filterAcademic;
-        
-        return matchesSearch && matchesStatus && matchesAcademic;
-      });
+  filteredProtocols.forEach(protocol => {
+    const releasePeriod = protocol.release_period;
+    if (!filteredGroupedProtocols[releasePeriod]) {
+      filteredGroupedProtocols[releasePeriod] = [];
     }
-  } else {
-    releaseOptions.forEach(release => {
-      if (groupedProtocols[release]) {
-        const filtered = groupedProtocols[release].filter(protocol => {
-          const matchesSearch = 
-            (protocol.spup_rec_code && protocol.spup_rec_code.toLowerCase().includes(searchTerm.toLowerCase())) ||
-            protocol.id.toLowerCase().includes(searchTerm.toLowerCase());
-          const matchesStatus = filterStatus === 'all' || 
-            protocol.status === filterStatus || 
-            (filterStatus === 'overdue' && isOverdue(protocol.due_date) && protocol.status !== 'Completed') ||
-            (filterStatus === 'due-soon' && isDueSoon(protocol.due_date) && protocol.status !== 'Completed');
-          const matchesAcademic = filterAcademic === 'all' || protocol.academic_level === filterAcademic;
-          
-          return matchesSearch && matchesStatus && matchesAcademic;
-        });
-        
-        if (filtered.length > 0) {
-          filteredGroupedProtocols[release] = filtered;
-        }
-      }
+    filteredGroupedProtocols[releasePeriod].push(protocol);
+  });
+
+  // Sort protocols within each release period group
+  Object.keys(filteredGroupedProtocols).forEach(releasePeriod => {
+    filteredGroupedProtocols[releasePeriod].sort((a, b) => {
+      // First sort by academic level
+      const academicCompare = (a.academic_level || '').localeCompare(b.academic_level || '');
+      if (academicCompare !== 0) return academicCompare;
+      
+      // Then sort by SPUP REC code
+      return (a.spup_rec_code || a.id).localeCompare(b.spup_rec_code || b.id);
     });
-  }
+  });
 
   const handleViewProtocol = (protocol: Protocol) => {
     setSelectedProtocol(protocol);
@@ -605,12 +525,15 @@ export default function ProtocolsPage() {
   };
 
   const handleReassign = (protocol: Protocol, reviewerId: string, reviewerName: string) => {
-    // Find the reviewer's current due date
+    // Find the reviewer's current due date and form type
     let currentDueDate = '';
+    let formType = '';
+    
     if (protocol.reviewers && protocol.reviewers.length > 0) {
       const reviewer = protocol.reviewers.find(r => r.id === reviewerId);
-      if (reviewer && reviewer.due_date) {
+      if (reviewer) {
         currentDueDate = ensureValidDueDate(reviewer.due_date);
+        formType = reviewer.form_type || '';
       }
     }
     
@@ -619,7 +542,8 @@ export default function ProtocolsPage() {
       reviewerId,
       reviewerName,
       loading: false,
-      currentDueDate: currentDueDate || protocol.due_date
+      currentDueDate: currentDueDate || protocol.due_date,
+      formType
     });
     setReassignModalOpen(true);
   };
@@ -945,7 +869,7 @@ export default function ProtocolsPage() {
                               const dueInfo = getDueDateInfo(protocol);
                               if (protocol.status === 'Completed') {
                                 return (
-                                  <div className="text-sm text-green-600">{dueInfo.displayDate} (Completed)</div>
+                                  <div className="text-sm text-green-600">{dueInfo.displayDate}</div>
                                 );
                               } else if (dueInfo.overdueReviewers > 0) {
                                 return (
@@ -1015,19 +939,29 @@ export default function ProtocolsPage() {
         protocol={selectedProtocol}
         onClose={() => setDetailsModalOpen(false)}
         onReassign={handleReassign}
+        reviewerList={reviewerList}
       />
 
       {/* Reassignment Modal */}
       {reassignmentData && (
         <ReassignmentModal
           isOpen={reassignModalOpen}
-          protocolName={reassignmentData.protocol.spup_rec_code || reassignmentData.protocol.protocol_name}
-          currentReviewerName={reassignmentData.reviewerName}
-          currentDueDate={reassignmentData.currentDueDate}
+          protocol={reassignmentData.protocol}
+          currentReviewer={{
+            id: reassignmentData.reviewerId,
+            name: reassignmentData.reviewerName,
+            status: 'In Progress',
+            due_date: reassignmentData.currentDueDate
+          }}
           reviewerList={reviewerList}
           loading={reassignmentData.loading}
           onCancel={() => setReassignModalOpen(false)}
-          onReassign={executeReassignment}
+          onSuccess={() => {
+            setReassignModalOpen(false);
+            setReassignmentData(null);
+            // Refresh the protocols list
+            fetchProtocols();
+          }}
         />
       )}
 

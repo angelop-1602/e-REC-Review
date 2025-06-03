@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { collection, getDocs, query, collectionGroup } from 'firebase/firestore';
+import { collection, getDocs, query, collectionGroup, orderBy, limit } from 'firebase/firestore';
 import { db } from '@/lib/firebaseconfig';
 import Link from 'next/link';
 import { isOverdue, isDueSoon, formatDate } from '@/lib/utils';
@@ -107,6 +107,7 @@ export default function AdminDashboard() {
     labels: [],
     datasets: []
   });
+  const [reassignmentStats, setReassignmentStats] = useState<{ reviewer: string; count: number }[]>([]);
   
   // Helper function to ensure due dates are in the correct format
   const ensureValidDueDate = (dueDate: string | Date | { toDate(): Date } | undefined): string => {
@@ -659,6 +660,39 @@ export default function AdminDashboard() {
     fetchDashboardData();
   }, []);
 
+  useEffect(() => {
+    const fetchReassignmentStats = async () => {
+      try {
+        const protocolsRef = collection(db, 'protocols');
+        const protocolsSnapshot = await getDocs(protocolsRef);
+        const stats: { [key: string]: number } = {};
+
+        for (const protocolDoc of protocolsSnapshot.docs) {
+          const auditRef = collection(protocolDoc.ref, 'audit');
+          const auditSnapshot = await getDocs(auditRef);
+          auditSnapshot.forEach((doc) => {
+            const data = doc.data();
+            const reviewer = data.reviewer;
+            if (reviewer) {
+              stats[reviewer] = (stats[reviewer] || 0) + 1;
+            }
+          });
+        }
+
+        const sortedStats = Object.entries(stats)
+          .map(([reviewer, count]) => ({ reviewer, count }))
+          .sort((a, b) => b.count - a.count);
+
+        setReassignmentStats(sortedStats);
+      } catch (err) {
+        console.error('Error fetching reassignment stats:', err);
+        setError('Failed to load reassignment statistics');
+      }
+    };
+
+    fetchReassignmentStats();
+  }, []);
+
   const getStatusBadge = (status: string, dueDate: string) => {
     if (status === 'Completed') {
       return <span className="bg-green-100 text-green-800 text-xs px-2 py-1 rounded-full">Completed</span>;
@@ -1065,6 +1099,32 @@ export default function AdminDashboard() {
           </div>
         </div>
       )}
+
+      <div className="mt-8">
+        <h2 className="text-xl font-semibold mb-4">Reassignment Analytics</h2>
+        {loading ? (
+          <p>Loading reassignment statistics...</p>
+        ) : error ? (
+          <p className="text-red-600">{error}</p>
+        ) : (
+          <table className="min-w-full bg-white border border-gray-200">
+            <thead>
+              <tr>
+                <th className="py-2 px-4 border-b">Reviewer</th>
+                <th className="py-2 px-4 border-b">Times Reassigned</th>
+              </tr>
+            </thead>
+            <tbody>
+              {reassignmentStats.map((stat, index) => (
+                <tr key={index}>
+                  <td className="py-2 px-4 border-b">{stat.reviewer}</td>
+                  <td className="py-2 px-4 border-b">{stat.count}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
     </div>
   );
 }
