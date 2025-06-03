@@ -189,7 +189,7 @@ export default function ReassignmentModal({
         form_type: currentReviewer.form_type || '',
         status: status,
         due_date: status === 'In Progress' ? newDueDate : '',
-        completed_at: status === 'Completed' ? Timestamp.now() : undefined
+        completed_at: status === 'Completed' ? Timestamp.now() : null
       };
 
       console.log('Created new reviewer object:', newReviewer);
@@ -205,7 +205,7 @@ export default function ReassignmentModal({
         date: timestamp,
         type: 'reassignment',
         status: status,
-        completed_at: status === 'Completed' ? timestamp : undefined
+        completed_at: status === 'Completed' ? timestamp : null
       };
 
       console.log('Created audit entry:', auditEntry);
