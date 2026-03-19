@@ -6,15 +6,18 @@
     "dev": "next dev --turbopack",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "seed:reviewers": "node scripts/seed-reviewers.mjs"
   },
   "dependencies": {
     "@types/papaparse": "^5.3.16",
     "@vercel/speed-insights": "^1.2.0",
+    "@xmldom/xmldom": "^0.8.11",
     "chart.js": "^4.4.9",
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
     "firebase": "^11.7.1",
+    "jszip": "^3.10.1",
     "next": "15.3.2",
     "papaparse": "^5.5.2",
     "react": "^19.0.0",

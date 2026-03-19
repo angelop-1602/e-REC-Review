@@ -11,6 +11,7 @@ export default function AdminNav() {
     { name: 'Dashboard', href: '/admin/dashboard' },
     { name: 'Protocols', href: '/admin/protocols' },
     { name: 'CSV Upload', href: '/admin/csv-upload' },
+    { name: 'Request Docs', href: '/admin/request-documents' },
     { name: 'Reviewers', href: '/admin/reviewers' },
     { name: 'Notices', href: '/admin/notices' },
   ];
