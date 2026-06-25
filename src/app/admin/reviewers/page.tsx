@@ -1,18 +1,86 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { collection, getDocs, doc, writeBatch, deleteDoc, updateDoc, query, orderBy } from 'firebase/firestore';
+import { useState, useEffect, useMemo } from 'react';
+import { collection, collectionGroup, getDocs, doc, deleteDoc, updateDoc, query, orderBy, setDoc, deleteField } from 'firebase/firestore';
 import { db } from '@/lib/firebaseconfig';
+import {
+  WEEK_IDS,
+  buildNotificationProtocols,
+  getProtocolPathParts,
+  groupProtocolsByMonth,
+  normalizeProtocolData,
+  type Protocol,
+} from '@/lib/protocols';
 
 interface Reviewer {
   id: string;
   name: string;
+  email?: string;
+}
+
+type MailScope = 'month' | 'week';
+
+interface SendSummary {
+  sent: unknown[];
+  skipped: unknown[];
+  failed: unknown[];
+}
+
+function isValidEmail(email: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function formatNotificationSummary(summary: SendSummary): string {
+  const parts = [];
+
+  if (summary.sent.length > 0) {
+    parts.push(`sent ${summary.sent.length} email${summary.sent.length === 1 ? '' : 's'}`);
+  }
+
+  if (summary.skipped.length > 0) {
+    parts.push(`skipped ${summary.skipped.length}`);
+  }
+
+  if (summary.failed.length > 0) {
+    parts.push(`${summary.failed.length} failed`);
+  }
+
+  return parts.length > 0 ? parts.join(', ') : 'no email was sent';
+}
+
+function normalizeMatchValue(value: unknown): string {
+  return typeof value === 'string' ? value.trim().toLowerCase() : '';
+}
+
+function isReviewerAssignmentMatch(
+  assignment: { id?: string; name?: string },
+  reviewer: Reviewer
+): boolean {
+  const assignmentValues = [
+    normalizeMatchValue(assignment.id),
+    normalizeMatchValue(assignment.name),
+  ].filter(Boolean);
+  const reviewerValues = [
+    normalizeMatchValue(reviewer.id),
+    normalizeMatchValue(reviewer.name),
+  ].filter(Boolean);
+
+  return assignmentValues.some((value) => reviewerValues.includes(value));
+}
+
+function getProtocolsForReviewer(protocols: Protocol[], reviewer: Reviewer): Protocol[] {
+  return protocols.filter((protocol) =>
+    (protocol.reviewers || []).some((assignment) => isReviewerAssignmentMatch(assignment, reviewer))
+  );
 }
 
 export default function ReviewersPage() {
   const [reviewers, setReviewers] = useState<Reviewer[]>([]);
+  const [protocols, setProtocols] = useState<Protocol[]>([]);
   const [loading, setLoading] = useState(true);
+  const [protocolLoading, setProtocolLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [protocolError, setProtocolError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   
   // New reviewer form state
@@ -20,11 +88,19 @@ export default function ReviewersPage() {
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [newReviewerId, setNewReviewerId] = useState('');
   const [newReviewerName, setNewReviewerName] = useState('');
+  const [newReviewerEmail, setNewReviewerEmail] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [selectedReviewer, setSelectedReviewer] = useState<Reviewer | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState('');
+  const [isMailModalOpen, setIsMailModalOpen] = useState(false);
+  const [mailReviewer, setMailReviewer] = useState<Reviewer | null>(null);
+  const [mailScope, setMailScope] = useState<MailScope>('month');
+  const [selectedMailMonthId, setSelectedMailMonthId] = useState('');
+  const [selectedMailWeekId, setSelectedMailWeekId] = useState('');
+  const [sendingMail, setSendingMail] = useState(false);
+  const [mailError, setMailError] = useState<string | null>(null);
   
   // Notification state
   const [notification, setNotification] = useState({
@@ -35,6 +111,7 @@ export default function ReviewersPage() {
   
   useEffect(() => {
     fetchReviewers();
+    fetchProtocolPeriods();
   }, []);
   
   const fetchReviewers = async () => {
@@ -48,7 +125,8 @@ export default function ReviewersPage() {
       querySnapshot.forEach((doc) => {
         reviewersList.push({ 
           id: doc.id, 
-          name: doc.data().name || doc.id 
+          name: doc.data().name || doc.id,
+          email: typeof doc.data().email === 'string' ? doc.data().email : '',
         });
       });
       
@@ -59,6 +137,43 @@ export default function ReviewersPage() {
       setError('Failed to load reviewers');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchProtocolPeriods = async () => {
+    try {
+      setProtocolLoading(true);
+      setProtocolError(null);
+
+      const fetchedProtocols: Protocol[] = [];
+
+      for (const weekId of WEEK_IDS) {
+        const protocolsGroupQuery = query(collectionGroup(db, weekId));
+        const protocolsGroupSnapshot = await getDocs(protocolsGroupQuery);
+
+        for (const protocolDoc of protocolsGroupSnapshot.docs) {
+          const pathParts = getProtocolPathParts(protocolDoc.ref.path);
+
+          if (!pathParts) {
+            continue;
+          }
+
+          fetchedProtocols.push(
+            normalizeProtocolData(protocolDoc.id, protocolDoc.data(), pathParts.monthId, pathParts.weekId)
+          );
+        }
+      }
+
+      const monthGroups = groupProtocolsByMonth(fetchedProtocols);
+
+      setProtocols(fetchedProtocols);
+      setSelectedMailMonthId((currentMonthId) => currentMonthId || monthGroups[0]?.monthId || '');
+      setSelectedMailWeekId((currentWeekId) => currentWeekId || monthGroups[0]?.weeks[0]?.weekId || '');
+    } catch (err) {
+      console.error('Error fetching protocol periods:', err);
+      setProtocolError('Failed to load month and week options for reviewer email.');
+    } finally {
+      setProtocolLoading(false);
     }
   };
   
@@ -75,6 +190,11 @@ export default function ReviewersPage() {
         setFormError('Reviewer ID and name are required');
         return;
       }
+
+      if (newReviewerEmail.trim() && !isValidEmail(newReviewerEmail.trim())) {
+        setFormError('Please enter a valid email address');
+        return;
+      }
       
       // Check if the ID already exists
       const existingReviewer = reviewers.find(r => r.id === newReviewerId);
@@ -85,12 +205,10 @@ export default function ReviewersPage() {
       
       // Add to Firestore
       const reviewerRef = doc(collection(db, 'reviewers'), newReviewerId);
-      await updateDoc(reviewerRef, {
-        name: newReviewerName
-      }).catch(() => {
-        // If updateDoc fails because the document doesn't exist, use setDoc
-        return writeBatch(db).set(reviewerRef, { name: newReviewerName }).commit();
-      });
+      await setDoc(reviewerRef, {
+        name: newReviewerName,
+        ...(newReviewerEmail.trim() ? { email: newReviewerEmail.trim() } : {}),
+      }, { merge: true });
       
       // Refresh the list
       await fetchReviewers();
@@ -98,6 +216,7 @@ export default function ReviewersPage() {
       // Reset form
       setNewReviewerId('');
       setNewReviewerName('');
+      setNewReviewerEmail('');
       setIsAddModalOpen(false);
       
       showNotification('Reviewer added successfully', 'success');
@@ -124,11 +243,17 @@ export default function ReviewersPage() {
         setFormError('Reviewer name is required');
         return;
       }
+
+      if (newReviewerEmail.trim() && !isValidEmail(newReviewerEmail.trim())) {
+        setFormError('Please enter a valid email address');
+        return;
+      }
       
       // Update in Firestore
       const reviewerRef = doc(collection(db, 'reviewers'), selectedReviewer.id);
       await updateDoc(reviewerRef, {
-        name: newReviewerName
+        name: newReviewerName,
+        email: newReviewerEmail.trim() ? newReviewerEmail.trim() : deleteField(),
       });
       
       // Refresh the list
@@ -137,6 +262,7 @@ export default function ReviewersPage() {
       // Reset form
       setSelectedReviewer(null);
       setNewReviewerName('');
+      setNewReviewerEmail('');
       setIsEditModalOpen(false);
       
       showNotification('Reviewer updated successfully', 'success');
@@ -178,6 +304,8 @@ export default function ReviewersPage() {
   const openEditModal = (reviewer: Reviewer) => {
     setSelectedReviewer(reviewer);
     setNewReviewerName(reviewer.name);
+    setNewReviewerEmail(reviewer.email || '');
+    setFormError(null);
     setIsEditModalOpen(true);
   };
   
@@ -185,6 +313,18 @@ export default function ReviewersPage() {
   const openDeleteModal = (id: string) => {
     setConfirmDeleteId(id);
     setIsDeleteModalOpen(true);
+  };
+
+  const openMailModal = (reviewer: Reviewer) => {
+    const reviewerMonthGroups = groupProtocolsByMonth(getProtocolsForReviewer(protocols, reviewer));
+    const firstMonth = reviewerMonthGroups[0];
+
+    setMailReviewer(reviewer);
+    setMailScope('month');
+    setSelectedMailMonthId(firstMonth?.monthId || '');
+    setSelectedMailWeekId(firstMonth?.weeks[0]?.weekId || '');
+    setMailError(null);
+    setIsMailModalOpen(true);
   };
   
   // Function to show notification
@@ -204,8 +344,127 @@ export default function ReviewersPage() {
   // Filter reviewers based on search query
   const filteredReviewers = reviewers.filter(reviewer => 
     reviewer.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    reviewer.id.toLowerCase().includes(searchQuery.toLowerCase())
+    reviewer.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    (reviewer.email || '').toLowerCase().includes(searchQuery.toLowerCase())
   );
+
+  const monthGroups = useMemo(() => groupProtocolsByMonth(protocols), [protocols]);
+  const reviewerMailMonthGroups = useMemo(() => (
+    mailReviewer ? groupProtocolsByMonth(getProtocolsForReviewer(protocols, mailReviewer)) : []
+  ), [mailReviewer, protocols]);
+  const availableMailMonthGroups = mailReviewer ? reviewerMailMonthGroups : monthGroups;
+  const selectedMailMonth = useMemo(
+    () => availableMailMonthGroups.find((month) => month.monthId === selectedMailMonthId) || availableMailMonthGroups[0],
+    [availableMailMonthGroups, selectedMailMonthId]
+  );
+  const selectedMailWeek = useMemo(
+    () => selectedMailMonth?.weeks.find((week) => week.weekId === selectedMailWeekId) || selectedMailMonth?.weeks[0],
+    [selectedMailMonth, selectedMailWeekId]
+  );
+  const selectedIndividualProtocols = useMemo(() => {
+    if (!mailReviewer || !selectedMailMonth) {
+      return [];
+    }
+
+    const periodProtocols = mailScope === 'week'
+      ? selectedMailWeek?.protocols ?? []
+      : selectedMailMonth.protocols;
+
+    return periodProtocols.filter((protocol) =>
+      (protocol.reviewers || []).some((reviewer) => isReviewerAssignmentMatch(reviewer, mailReviewer))
+    );
+  }, [mailReviewer, mailScope, selectedMailMonth, selectedMailWeek]);
+
+  useEffect(() => {
+    if (!selectedMailMonthId && availableMailMonthGroups[0]) {
+      setSelectedMailMonthId(availableMailMonthGroups[0].monthId);
+    }
+  }, [availableMailMonthGroups, selectedMailMonthId]);
+
+  useEffect(() => {
+    if (!selectedMailMonth) {
+      setSelectedMailWeekId('');
+      return;
+    }
+
+    if (!selectedMailWeekId || !selectedMailMonth.weeks.some((week) => week.weekId === selectedMailWeekId)) {
+      setSelectedMailWeekId(selectedMailMonth.weeks[0]?.weekId || '');
+    }
+  }, [selectedMailMonth, selectedMailWeekId]);
+
+  const sendIndividualReviewerMail = async () => {
+    if (!mailReviewer || !selectedMailMonth) {
+      return;
+    }
+
+    if (!mailReviewer.email) {
+      setMailError('This reviewer does not have an email address.');
+      return;
+    }
+
+    if (mailScope === 'week' && !selectedMailWeek) {
+      setMailError('Please select a week.');
+      return;
+    }
+
+    if (selectedIndividualProtocols.length === 0) {
+      setMailError('This reviewer has no protocols for the selected period.');
+      return;
+    }
+
+    setSendingMail(true);
+    setMailError(null);
+
+    try {
+      const notificationProtocols = buildNotificationProtocols(selectedIndividualProtocols)
+        .map((protocol) => ({
+          ...protocol,
+          reviewers: protocol.reviewers
+            .filter((reviewer) => isReviewerAssignmentMatch(reviewer, mailReviewer))
+            .map((reviewer) => ({
+              ...reviewer,
+              id: mailReviewer.id,
+              name: mailReviewer.name,
+            })),
+        }))
+        .filter((protocol) => protocol.reviewers.length > 0);
+
+      const response = await fetch('/api/admin/review-notifications', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          scope: mailScope,
+          monthDocumentId: selectedMailMonth.monthId,
+          weekId: mailScope === 'week' ? selectedMailWeek?.weekId : undefined,
+          protocols: notificationProtocols,
+        }),
+      });
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to send reviewer email.');
+      }
+
+      const hasProblems = result.failed?.length > 0 || result.sent?.length === 0;
+      const periodLabel = mailScope === 'week'
+        ? `${selectedMailMonth.monthLabel} ${selectedMailWeek?.weekLabel}`
+        : selectedMailMonth.monthLabel;
+
+      setIsMailModalOpen(false);
+      setMailReviewer(null);
+      showNotification(
+        `${mailReviewer.name} - ${periodLabel}: ${formatNotificationSummary(result as SendSummary)}.`,
+        hasProblems ? 'error' : 'success'
+      );
+    } catch (err) {
+      console.error('Error sending individual reviewer email:', err);
+      setMailError(err instanceof Error ? err.message : 'Failed to send reviewer email.');
+    } finally {
+      setSendingMail(false);
+    }
+  };
   
   if (loading) {
     return (
@@ -222,7 +481,13 @@ export default function ReviewersPage() {
         <h1 className="text-2xl font-bold">Reviewers Management</h1>
         <div className="flex space-x-4">
           <button
-            onClick={() => setIsAddModalOpen(true)}
+            onClick={() => {
+              setNewReviewerId('');
+              setNewReviewerName('');
+              setNewReviewerEmail('');
+              setFormError(null);
+              setIsAddModalOpen(true);
+            }}
             className="bg-green-500 text-white py-2 px-4 rounded hover:bg-green-600"
           >
             Add New Reviewer
@@ -233,6 +498,12 @@ export default function ReviewersPage() {
       {error && (
         <div className="p-4 bg-red-100 text-red-800 rounded">
           {error}
+        </div>
+      )}
+
+      {protocolError && (
+        <div className="p-4 bg-yellow-100 text-yellow-800 rounded">
+          {protocolError}
         </div>
       )}
       
@@ -292,9 +563,31 @@ export default function ReviewersPage() {
                     <div className="ml-3">
                       <p className="font-medium">{reviewer.name}</p>
                       <p className="text-xs text-gray-500">{reviewer.id}</p>
+                      <p className="text-xs text-gray-500">{reviewer.email || 'No email'}</p>
                     </div>
                   </div>
                   <div className="flex space-x-2">
+                    <button
+                      type="button"
+                      onClick={() => openMailModal(reviewer)}
+                      disabled={!reviewer.email || protocolLoading || monthGroups.length === 0}
+                      className={`${
+                        reviewer.email && !protocolLoading && monthGroups.length > 0
+                          ? 'text-green-600 hover:text-green-800'
+                          : 'text-gray-300 cursor-not-allowed'
+                      }`}
+                      title={
+                        !reviewer.email
+                          ? 'Reviewer has no email'
+                          : protocolLoading
+                            ? 'Loading periods'
+                            : 'Send review email'
+                      }
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8m-18 8h18a2 2 0 002-2V8a2 2 0 00-2-2H3a2 2 0 00-2 2v6a2 2 0 002 2z" />
+                      </svg>
+                    </button>
                     <button 
                       onClick={() => openEditModal(reviewer)}
                       className="text-blue-500 hover:text-blue-700"
@@ -318,6 +611,121 @@ export default function ReviewersPage() {
           </div>
         )}
       </div>
+
+      {/* Individual Reviewer Email Modal */}
+      {isMailModalOpen && mailReviewer && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg shadow-lg p-6 w-full max-w-lg">
+            <h2 className="text-xl font-semibold mb-2">Send Review Email</h2>
+            <p className="text-sm text-gray-600 mb-5">
+              {mailReviewer.name} - {mailReviewer.email || 'No email'}
+            </p>
+
+            {mailError && (
+              <div className="mb-4 p-2 bg-red-100 text-red-800 rounded">
+                {mailError}
+              </div>
+            )}
+
+            <div className="space-y-4">
+              <div>
+                <label htmlFor="mailScope" className="block text-sm font-medium text-gray-700 mb-1">
+                  Send For
+                </label>
+                <select
+                  id="mailScope"
+                  value={mailScope}
+                  onChange={(e) => {
+                    setMailScope(e.target.value as MailScope);
+                    setMailError(null);
+                  }}
+                  className="w-full p-2 border rounded-md"
+                >
+                  <option value="month">Full Month</option>
+                  <option value="week">Specific Week</option>
+                </select>
+              </div>
+
+              <div>
+                <label htmlFor="mailMonth" className="block text-sm font-medium text-gray-700 mb-1">
+                  Month
+                </label>
+                <select
+                  id="mailMonth"
+                  value={selectedMailMonth?.monthId || ''}
+                  onChange={(e) => {
+                    const monthId = e.target.value;
+                    const month = availableMailMonthGroups.find((monthGroup) => monthGroup.monthId === monthId);
+
+                    setSelectedMailMonthId(monthId);
+                    setSelectedMailWeekId(month?.weeks[0]?.weekId || '');
+                    setMailError(null);
+                  }}
+                  className="w-full p-2 border rounded-md"
+                >
+                  {availableMailMonthGroups.map((month) => (
+                    <option key={month.monthId} value={month.monthId}>
+                      {month.monthLabel}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {mailScope === 'week' && (
+                <div>
+                  <label htmlFor="mailWeek" className="block text-sm font-medium text-gray-700 mb-1">
+                    Week
+                  </label>
+                  <select
+                    id="mailWeek"
+                    value={selectedMailWeek?.weekId || ''}
+                    onChange={(e) => {
+                      setSelectedMailWeekId(e.target.value);
+                      setMailError(null);
+                    }}
+                    className="w-full p-2 border rounded-md"
+                  >
+                    {(selectedMailMonth?.weeks || []).map((week) => (
+                      <option key={week.weekId} value={week.weekId}>
+                        {week.weekLabel}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              <div className="rounded-md bg-gray-50 border border-gray-200 p-3 text-sm text-gray-700">
+                {availableMailMonthGroups.length === 0
+                  ? 'No uploaded protocols match this reviewer yet. Check that the reviewer ID or name in the protocol assignment matches this reviewer record.'
+                  : `${selectedIndividualProtocols.length} protocol${selectedIndividualProtocols.length === 1 ? '' : 's'} will be included for this reviewer.`}
+              </div>
+            </div>
+
+            <div className="flex justify-end space-x-3 mt-6">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsMailModalOpen(false);
+                  setMailReviewer(null);
+                  setMailError(null);
+                }}
+                className="bg-gray-200 text-gray-700 py-2 px-4 rounded hover:bg-gray-300"
+                disabled={sendingMail}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={sendIndividualReviewerMail}
+                className="bg-green-600 text-white py-2 px-4 rounded hover:bg-green-700 disabled:opacity-50"
+                disabled={sendingMail || availableMailMonthGroups.length === 0 || selectedIndividualProtocols.length === 0 || !mailReviewer.email}
+              >
+                {sendingMail ? 'Sending...' : 'Send Email'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       
       {/* Add Reviewer Modal */}
       {isAddModalOpen && (
@@ -364,11 +772,31 @@ export default function ReviewersPage() {
                   required
                 />
               </div>
+
+              <div className="mb-6">
+                <label htmlFor="reviewerEmail" className="block text-sm font-medium text-gray-700 mb-1">
+                  Reviewer Email
+                </label>
+                <input
+                  type="email"
+                  id="reviewerEmail"
+                  value={newReviewerEmail}
+                  onChange={(e) => setNewReviewerEmail(e.target.value)}
+                  placeholder="reviewer@spup.edu.ph"
+                  className="w-full p-2 border rounded-md"
+                />
+              </div>
               
               <div className="flex justify-end space-x-3">
                 <button
                   type="button"
-                  onClick={() => setIsAddModalOpen(false)}
+                  onClick={() => {
+                    setIsAddModalOpen(false);
+                    setNewReviewerId('');
+                    setNewReviewerName('');
+                    setNewReviewerEmail('');
+                    setFormError(null);
+                  }}
                   className="bg-gray-200 text-gray-700 py-2 px-4 rounded hover:bg-gray-300"
                   disabled={isSubmitting}
                 >
@@ -429,11 +857,31 @@ export default function ReviewersPage() {
                   required
                 />
               </div>
+
+              <div className="mb-6">
+                <label htmlFor="editReviewerEmail" className="block text-sm font-medium text-gray-700 mb-1">
+                  Reviewer Email
+                </label>
+                <input
+                  type="email"
+                  id="editReviewerEmail"
+                  value={newReviewerEmail}
+                  onChange={(e) => setNewReviewerEmail(e.target.value)}
+                  placeholder="reviewer@spup.edu.ph"
+                  className="w-full p-2 border rounded-md"
+                />
+              </div>
               
               <div className="flex justify-end space-x-3">
                 <button
                   type="button"
-                  onClick={() => setIsEditModalOpen(false)}
+                  onClick={() => {
+                    setIsEditModalOpen(false);
+                    setSelectedReviewer(null);
+                    setNewReviewerName('');
+                    setNewReviewerEmail('');
+                    setFormError(null);
+                  }}
                   className="bg-gray-200 text-gray-700 py-2 px-4 rounded hover:bg-gray-300"
                   disabled={isSubmitting}
                 >

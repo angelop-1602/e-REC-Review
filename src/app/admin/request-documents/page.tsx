@@ -51,6 +51,8 @@ function getFileNameFromDisposition(headerValue: string | null, fallback: string
 }
 
 export default function RequestDocumentsPage() {
+  const currentYear = new Date().getFullYear();
+  const yearOptions = [currentYear - 1, currentYear, currentYear + 1];
   const [activeTab, setActiveTab] = useState<ActiveTab>('letter');
   const [inputMode, setInputMode] = useState<'file' | 'paste'>('file');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -65,7 +67,7 @@ export default function RequestDocumentsPage() {
   const [dateToday, setDateToday] = useState(() => new Date().toISOString().split('T')[0]);
   const [periodStartMonth, setPeriodStartMonth] = useState<(typeof REQUEST_DOCUMENT_MONTHS)[number]>('January');
   const [periodEndMonth, setPeriodEndMonth] = useState<(typeof REQUEST_DOCUMENT_MONTHS)[number]>('March');
-  const [year, setYear] = useState(new Date().getFullYear());
+  const [year, setYear] = useState(currentYear);
 
   const amountPerReview = useMemo(() => calculateAmount(educationLevel), [educationLevel]);
   const periodDisplay = useMemo(
@@ -323,14 +325,17 @@ export default function RequestDocumentsPage() {
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 items-end">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Year</label>
-            <input
-              type="number"
-              min={2020}
-              max={2100}
+            <select
               value={year}
               onChange={(event) => setYear(Number(event.target.value))}
               className="w-full border rounded-md px-3 py-2"
-            />
+            >
+              {yearOptions.map((optionYear) => (
+                <option key={optionYear} value={optionYear}>
+                  {optionYear}
+                </option>
+              ))}
+            </select>
           </div>
           <div className="lg:col-span-3">
             <div className="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-900">

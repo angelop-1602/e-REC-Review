@@ -32,6 +32,8 @@ interface ProtocolTableProps {
   loading: boolean;
   emptyMessage?: string;
   onViewDetails?: (protocol: Protocol) => void;
+  onEdit?: (protocol: Protocol) => void;
+  onDelete?: (protocol: Protocol) => void;
   onReassign?: (protocol: Protocol, reviewerId: string, reviewerName: string) => void;
 }
 
@@ -40,6 +42,8 @@ export default function ProtocolTable({
   loading,
   emptyMessage = 'No protocols found.',
   onViewDetails,
+  onEdit,
+  onDelete,
   onReassign
 }: ProtocolTableProps) {
   // Function to get status label with appropriate styling
@@ -216,14 +220,35 @@ export default function ProtocolTable({
                 </td>
               )}
               <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                <button
-                  onClick={() => onViewDetails && onViewDetails(protocol)}
-                  className="text-blue-600 hover:text-blue-800 mr-3"
-                >
-                  View Details
-                </button>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                  <button
+                    type="button"
+                    onClick={() => onViewDetails && onViewDetails(protocol)}
+                    className="text-blue-600 hover:text-blue-800"
+                  >
+                    View Details
+                  </button>
+                  {onEdit && (
+                    <button
+                      type="button"
+                      onClick={() => onEdit(protocol)}
+                      className="text-emerald-600 hover:text-emerald-800"
+                    >
+                      Edit
+                    </button>
+                  )}
+                  {onDelete && (
+                    <button
+                      type="button"
+                      onClick={() => onDelete(protocol)}
+                      className="text-gray-600 hover:text-gray-800"
+                    >
+                      Delete
+                    </button>
+                  )}
                 {protocol.status !== 'Completed' && onReassign && (
                   <button
+                    type="button"
                     onClick={() => {
                       if (protocol.reviewers && protocol.reviewers.length > 0) {
                         // Find first non-completed reviewer
@@ -240,6 +265,7 @@ export default function ProtocolTable({
                     Reassign
                   </button>
                 )}
+                </div>
               </td>
             </tr>
           ))}

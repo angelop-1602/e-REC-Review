@@ -39,6 +39,7 @@ function validateReviewerSeeds(seeds) {
 
     const id = typeof reviewer.id === 'string' ? reviewer.id.trim() : '';
     const name = typeof reviewer.name === 'string' ? reviewer.name.trim() : '';
+    const email = typeof reviewer.email === 'string' ? reviewer.email.trim() : '';
 
     if (!id || !name) {
       throw new Error(`Reviewer seed entries require non-empty id and name. Received: ${JSON.stringify(reviewer)}`);
@@ -52,9 +53,25 @@ function validateReviewerSeeds(seeds) {
       throw new Error(`Duplicate reviewer name found in seed data: ${name}`);
     }
 
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      throw new Error(`Invalid reviewer email found for ${id}: ${email}`);
+    }
+
     idSet.add(id);
     nameSet.add(name);
   }
+}
+
+function buildReviewerPayload(reviewer) {
+  const payload = {
+    name: reviewer.name.trim(),
+  };
+
+  if (typeof reviewer.email === 'string' && reviewer.email.trim()) {
+    payload.email = reviewer.email.trim();
+  }
+
+  return payload;
 }
 
 function buildFirebaseConfig() {
@@ -81,7 +98,10 @@ async function seedReviewers() {
   const existingReviewers = new Map(
     reviewersSnapshot.docs.map((reviewerDoc) => [
       reviewerDoc.id,
-      typeof reviewerDoc.data().name === 'string' ? reviewerDoc.data().name : '',
+      {
+        name: typeof reviewerDoc.data().name === 'string' ? reviewerDoc.data().name : '',
+        email: typeof reviewerDoc.data().email === 'string' ? reviewerDoc.data().email : '',
+      },
     ])
   );
 
@@ -93,28 +113,34 @@ async function seedReviewers() {
 
   for (const reviewer of reviewerSeeds) {
     const reviewerRef = doc(db, 'reviewers', reviewer.id);
-    const currentName = existingReviewers.get(reviewer.id);
+    const currentReviewer = existingReviewers.get(reviewer.id);
+    const reviewerPayload = buildReviewerPayload(reviewer);
 
-    if (currentName === undefined) {
-      await setDoc(reviewerRef, { name: reviewer.name });
+    if (currentReviewer === undefined) {
+      await setDoc(reviewerRef, reviewerPayload);
       summary.created.push(reviewer);
       console.log(`Created ${reviewer.id} -> ${reviewer.name}`);
       continue;
     }
 
-    if (currentName === reviewer.name) {
+    const hasChanges = Object.entries(reviewerPayload).some(
+      ([key, value]) => currentReviewer[key] !== value
+    );
+
+    if (!hasChanges) {
       summary.skipped.push(reviewer);
       console.log(`Skipped ${reviewer.id} (already up to date)`);
       continue;
     }
 
-    await setDoc(reviewerRef, { name: reviewer.name }, { merge: true });
+    await setDoc(reviewerRef, reviewerPayload, { merge: true });
     summary.updated.push({
       id: reviewer.id,
-      previousName: currentName,
+      previousName: currentReviewer.name,
       nextName: reviewer.name,
+      email: reviewerPayload.email ?? currentReviewer.email,
     });
-    console.log(`Updated ${reviewer.id}: "${currentName}" -> "${reviewer.name}"`);
+    console.log(`Updated ${reviewer.id}: "${currentReviewer.name}" -> "${reviewer.name}"`);
   }
 
   console.log('');

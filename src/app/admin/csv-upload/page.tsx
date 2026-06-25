@@ -16,6 +16,21 @@ const headers = [
   'E Link', 'PRA1', 'PRA2', 'ICA', 'IACUC', 'IACUC2', 'CREF1', 'CREF2'
 ];
 
+const monthOptions = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+];
+
 type CSVRow = { [key: string]: string };
 type Reviewer = { id: string; name: string; form_type: string; status: string; due_date: string };
 type Protocol = {
@@ -28,8 +43,33 @@ type Protocol = {
   reviewers: Reviewer[];
   created_at: string;
 };
+type NotificationSummary = {
+  sent: unknown[];
+  skipped: unknown[];
+  failed: unknown[];
+};
+
+function formatNotificationSummary(summary: NotificationSummary): string {
+  const parts = [];
+
+  if (summary.sent.length > 0) {
+    parts.push(`sent ${summary.sent.length} reviewer email${summary.sent.length === 1 ? '' : 's'}`);
+  }
+
+  if (summary.skipped.length > 0) {
+    parts.push(`skipped ${summary.skipped.length} reviewer${summary.skipped.length === 1 ? '' : 's'} without email`);
+  }
+
+  if (summary.failed.length > 0) {
+    parts.push(`${summary.failed.length} email${summary.failed.length === 1 ? '' : 's'} failed`);
+  }
+
+  return parts.length > 0 ? ` Notifications: ${parts.join(', ')}.` : ' No reviewer emails were sent.';
+}
 
 export default function CSVUploader() {
+  const currentYear = new Date().getFullYear();
+  const yearOptions = [currentYear - 1, currentYear, currentYear + 1];
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [rows, setRows] = useState<CSVRow[]>([]);
   const [processedData, setProcessedData] = useState<Protocol[]>([]);
@@ -42,10 +82,12 @@ export default function CSVUploader() {
   });
   const [selectedMonth, setSelectedMonth] = useState(() => {
     const date = new Date();
-    return `${date.toLocaleString('default', { month: 'long' })}${date.getFullYear()}`;
+    return date.toLocaleString('default', { month: 'long' });
   });
+  const [selectedYear, setSelectedYear] = useState(currentYear);
   const [selectedWeek, setSelectedWeek] = useState('week-1');
   const [previewData, setPreviewData] = useState<Protocol[]>([]);
+  const [sendNotifications, setSendNotifications] = useState(true);
 
   const reviewerCache = new Map<string, string>();
 
@@ -93,6 +135,7 @@ export default function CSVUploader() {
   };
 
   const handlePaste = async (e: React.ClipboardEvent<HTMLDivElement>) => {
+    setUploadStatus('');
     const pasted = e.clipboardData.getData('text/plain');
     const lines = pasted.trim().split(/\r?\n/);
     const parsed: CSVRow[] = lines.map(line => {
@@ -106,6 +149,7 @@ export default function CSVUploader() {
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setUploadStatus('');
     const file = e.target.files?.[0];
     if (!file) return;
     Papa.parse<CSVRow>(file, {
@@ -123,13 +167,51 @@ export default function CSVUploader() {
     setUploadStatus('Uploading...');
     setLoading(true);
     try {
-      const baseRef = doc(collection(db, 'protocols'), selectedMonth);
+      const monthDocumentId = `${selectedMonth}${selectedYear}`;
+      const baseRef = doc(collection(db, 'protocols'), monthDocumentId);
       const weekRef = collection(baseRef, selectedWeek);
+      const uploadedCount = processedData.length;
+      const uploadedProtocols = processedData;
       for (const protocol of processedData) {
         const docRef = doc(weekRef, protocol.spup_rec_code);
         await setDoc(docRef, protocol);
       }
-      setUploadStatus(`Successfully uploaded ${processedData.length} protocols.`);
+      let notificationMessage = '';
+
+      if (sendNotifications) {
+        try {
+          setUploadStatus('Uploaded. Sending reviewer notifications...');
+          const response = await fetch('/api/admin/review-notifications', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              monthDocumentId,
+              weekId: selectedWeek,
+              protocols: uploadedProtocols,
+            }),
+          });
+          const notificationResult = await response.json();
+
+          if (!response.ok) {
+            throw new Error(notificationResult.error || 'Failed to send reviewer notifications.');
+          }
+
+          notificationMessage = formatNotificationSummary(notificationResult as NotificationSummary);
+        } catch (notificationError) {
+          console.error('Reviewer notification email failed:', notificationError);
+          notificationMessage = ` Reviewer email notifications failed: ${notificationError instanceof Error ? notificationError.message : 'Unknown error'}.`;
+        }
+      }
+
+      setRows([]);
+      setProcessedData([]);
+      setPreviewData([]);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+      setUploadStatus(`Successfully uploaded ${uploadedCount} protocols. The table has been cleared.${notificationMessage}`);
     } catch (e) {
       console.error(e);
       setUploadStatus('Upload failed.');
@@ -142,10 +224,22 @@ export default function CSVUploader() {
     <div className="p-6 max-w-6xl mx-auto">
       <h1 className="text-2xl font-bold mb-4 text-blue-800">CSV Upload with Reviewer Mapping</h1>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">Month</label>
-          <input className="border rounded-md p-2 w-full focus:ring-blue-500 focus:border-blue-500" type="text" value={selectedMonth} onChange={e => setSelectedMonth(e.target.value)} placeholder="Month" />
+          <select className="border rounded-md p-2 w-full focus:ring-blue-500 focus:border-blue-500" value={selectedMonth} onChange={e => setSelectedMonth(e.target.value)}>
+            {monthOptions.map(month => (
+              <option key={month} value={month}>{month}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Year</label>
+          <select className="border rounded-md p-2 w-full focus:ring-blue-500 focus:border-blue-500" value={selectedYear} onChange={e => setSelectedYear(Number(e.target.value))}>
+            {yearOptions.map(year => (
+              <option key={year} value={year}>{year}</option>
+            ))}
+          </select>
         </div>
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">Week</label>
@@ -168,6 +262,19 @@ export default function CSVUploader() {
         <label className="block text-sm font-medium text-gray-700 mb-1">Upload CSV File</label>
         <input className="border rounded-md p-2 w-full focus:ring-blue-500 focus:border-blue-500" type="file" onChange={handleFileChange} ref={fileInputRef} />
         <p className="mt-2 text-xs text-gray-500">Or paste Excel data directly into the table below (tab-separated, with headers matching: {headers.join(', ')})</p>
+      </div>
+
+      <div className="mb-4 flex items-start gap-2">
+        <input
+          id="sendNotifications"
+          type="checkbox"
+          checked={sendNotifications}
+          onChange={e => setSendNotifications(e.target.checked)}
+          className="mt-1 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+        />
+        <label htmlFor="sendNotifications" className="text-sm text-gray-700">
+          Send email notifications to reviewers after upload
+        </label>
       </div>
 
       <div className="overflow-auto border rounded-lg bg-white shadow mb-6">
