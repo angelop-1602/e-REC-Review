@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "seed:reviewers": "node scripts/seed-reviewers.mjs"
+    "seed:reviewers": "node scripts/seed-reviewers.mjs",
+    "cleanup:reviewers": "node scripts/cleanup-duplicate-reviewers.mjs"
   },
   "dependencies": {
     "@types/nodemailer": "^8.0.1",
@@ -19,7 +20,7 @@
     "date-fns": "^4.1.0",
     "firebase": "^11.7.1",
     "jszip": "^3.10.1",
-    "next": "15.3.2",
+    "next": "15.3.8",
     "nodemailer": "^9.0.1",
     "papaparse": "^5.5.2",
     "react": "^19.0.0",
@@ -38,7 +39,7 @@
     "@types/react-dom": "^19",
     "autoprefixer": "^10.4.21",
     "eslint": "^9",
-    "eslint-config-next": "15.3.2",
+    "eslint-config-next": "15.3.8",
     "tailwindcss": "^4",
     "typescript": "^5"
   }
