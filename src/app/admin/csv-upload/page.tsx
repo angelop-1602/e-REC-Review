@@ -198,7 +198,7 @@ export default function CSVUploader() {
             throw new Error(notificationResult.error || 'Failed to send reviewer notifications.');
           }
 
-          notificationMessage = formatNotificationSummary(notificationResult as NotificationSummary);
+          notificationMessage = `${formatNotificationSummary(notificationResult as NotificationSummary)} Track details on the Mailing page.`;
         } catch (notificationError) {
           console.error('Reviewer notification email failed:', notificationError);
           notificationMessage = ` Reviewer email notifications failed: ${notificationError instanceof Error ? notificationError.message : 'Unknown error'}.`;

@@ -487,7 +487,7 @@ export default function ProtocolWeekPage() {
 
       setNotice({
         type: result.failed?.length > 0 ? 'error' : 'success',
-        message: `${monthLabel} ${weekLabel}: ${formatNotificationSummary(result as SendSummary)}.`,
+        message: `${monthLabel} ${weekLabel}: ${formatNotificationSummary(result as SendSummary)}. Track details on the Mailing page.`,
       });
     } catch (sendError) {
       console.error('Failed to send week notifications:', sendError);

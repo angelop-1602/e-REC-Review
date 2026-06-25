@@ -1,9 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { doc, getDoc } from 'firebase/firestore';
+import {
+  collection,
+  doc,
+  getDocs,
+  serverTimestamp,
+  setDoc,
+  updateDoc,
+  type DocumentReference,
+} from 'firebase/firestore';
 import { getMailFrom, getMailTransporter } from '@/lib/mailer';
 import { getServerFirestore } from '@/lib/serverFirebase';
 import { formatMonthLabel, formatWeekLabel } from '@/lib/protocols';
 import { getFormTypeName } from '@/lib/utils';
+
+export const runtime = 'nodejs';
+export const maxDuration = 300;
 
 interface ReviewerAssignment {
   id: string;
@@ -29,10 +40,14 @@ interface NotificationPayload {
   protocols: ProtocolPayload[];
 }
 
+type MailDeliveryStatus = 'pending' | 'sending' | 'sent' | 'failed' | 'skipped';
+
 interface ReviewerEmailRecipient {
   id: string;
   name: string;
   email: string;
+  requestedReviewerId: string;
+  emailMatchSource: ReviewerEmailInfo['matchSource'];
   protocols: Array<{
     spupRecCode: string;
     researchTitle: string;
@@ -47,8 +62,66 @@ interface ReviewerEmailRecipient {
   }>;
 }
 
+interface ReviewerEmailInfo {
+  id: string;
+  name: string;
+  email: string;
+  matchSource: 'id' | 'name' | 'none';
+}
+
+interface MailBatchCounts {
+  pending: number;
+  sending: number;
+  sent: number;
+  skipped: number;
+  failed: number;
+}
+
+interface MailLogItem {
+  recipient: ReviewerEmailRecipient;
+  logRef: DocumentReference;
+  status: MailDeliveryStatus;
+}
+
+const DEFAULT_SEND_DELAY_MS = 750;
+const DEFAULT_MAX_ATTEMPTS = 3;
+
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
+}
+
+function getPositiveIntegerEnv(name: string, fallback: number): number {
+  const rawValue = process.env[name];
+
+  if (!rawValue) {
+    return fallback;
+  }
+
+  const value = Number(rawValue);
+
+  return Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
+function getMaxSendAttempts(): number {
+  return getPositiveIntegerEnv('MAIL_RETRY_ATTEMPTS', DEFAULT_MAX_ATTEMPTS);
+}
+
+function getSendDelayMs(): number {
+  return getPositiveIntegerEnv('MAIL_SEND_DELAY_MS', DEFAULT_SEND_DELAY_MS);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : 'Unknown mail sending error.';
+}
+
+function normalizeLookupValue(value: unknown): string {
+  return typeof value === 'string' ? value.trim().toLowerCase().replace(/\s+/g, ' ') : '';
 }
 
 function escapeHtml(value: string): string {
@@ -97,34 +170,81 @@ function validatePayload(payload: unknown): NotificationPayload {
   };
 }
 
-async function getReviewerEmailMap(reviewerIds: string[]) {
+async function getReviewerEmailMap(assignments: Array<{ id: string; name?: string }>) {
   const db = getServerFirestore();
-  const reviewers = new Map<string, { name: string; email: string }>();
+  const reviewers = new Map<string, ReviewerEmailInfo>();
+  const requestedReviewers = new Map<string, { id: string; name: string }>();
 
-  await Promise.all(
-    reviewerIds.map(async (reviewerId) => {
-      const reviewerSnapshot = await getDoc(doc(db, 'reviewers', reviewerId));
+  for (const assignment of assignments) {
+    if (!isNonEmptyString(assignment.id)) {
+      continue;
+    }
 
-      if (!reviewerSnapshot.exists()) {
-        reviewers.set(reviewerId, { name: reviewerId, email: '' });
-        return;
+    const reviewerId = assignment.id.trim();
+    requestedReviewers.set(reviewerId, {
+      id: reviewerId,
+      name: isNonEmptyString(assignment.name) ? assignment.name.trim() : reviewerId,
+    });
+  }
+
+  const reviewerSnapshot = await getDocs(collection(db, 'reviewers'));
+  const reviewersById = new Map<string, ReviewerEmailInfo>();
+  const reviewersByName = new Map<string, ReviewerEmailInfo>();
+
+  reviewerSnapshot.forEach((reviewerDoc) => {
+    const reviewerData = reviewerDoc.data();
+    const reviewerInfo: ReviewerEmailInfo = {
+      id: reviewerDoc.id,
+      name: isNonEmptyString(reviewerData.name) ? reviewerData.name.trim() : reviewerDoc.id,
+      email: isNonEmptyString(reviewerData.email) ? reviewerData.email.trim() : '',
+      matchSource: 'id',
+    };
+    const normalizedId = normalizeLookupValue(reviewerDoc.id);
+    const normalizedName = normalizeLookupValue(reviewerInfo.name);
+
+    if (normalizedId) {
+      reviewersById.set(normalizedId, reviewerInfo);
+    }
+
+    if (normalizedName) {
+      const existingReviewer = reviewersByName.get(normalizedName);
+
+      if (!existingReviewer || (!existingReviewer.email && reviewerInfo.email)) {
+        reviewersByName.set(normalizedName, reviewerInfo);
       }
+    }
+  });
 
-      const reviewerData = reviewerSnapshot.data();
+  for (const requestedReviewer of requestedReviewers.values()) {
+    const normalizedId = normalizeLookupValue(requestedReviewer.id);
+    const normalizedName = normalizeLookupValue(requestedReviewer.name);
+    const matchedById = reviewersById.get(normalizedId);
+    const matchedByIdAsName = reviewersByName.get(normalizedId);
+    const matchedByName = reviewersByName.get(normalizedName) || reviewersById.get(normalizedName);
+    const matchedReviewer = matchedById || matchedByIdAsName || matchedByName;
 
-      reviewers.set(reviewerId, {
-        name: isNonEmptyString(reviewerData.name) ? reviewerData.name.trim() : reviewerId,
-        email: isNonEmptyString(reviewerData.email) ? reviewerData.email.trim() : '',
+    if (matchedReviewer) {
+      reviewers.set(requestedReviewer.id, {
+        ...matchedReviewer,
+        matchSource: matchedById ? 'id' : 'name',
       });
-    })
-  );
+      continue;
+    }
+
+    reviewers.set(requestedReviewer.id, {
+      id: requestedReviewer.id,
+      name: requestedReviewer.name,
+      email: '',
+      matchSource: 'none',
+    });
+  }
 
   return reviewers;
 }
 
 function buildRecipients(
   protocols: ProtocolPayload[],
-  reviewerEmailMap: Map<string, { name: string; email: string }>,
+  reviewerEmailMap: Map<string, ReviewerEmailInfo>,
   fallbackWeekId?: string
 ): ReviewerEmailRecipient[] {
   const recipients = new Map<string, ReviewerEmailRecipient>();
@@ -138,10 +258,13 @@ function buildRecipients(
       const reviewerId = reviewer.id.trim();
       const reviewerInfo = reviewerEmailMap.get(reviewerId);
       const reviewerName = reviewerInfo?.name || reviewer.name || reviewerId;
-      const recipient = recipients.get(reviewerId) ?? {
-        id: reviewerId,
+      const recipientId = reviewerInfo?.id || reviewerId;
+      const recipient = recipients.get(recipientId) ?? {
+        id: recipientId,
         name: reviewerName,
         email: reviewerInfo?.email ?? '',
+        requestedReviewerId: reviewerId,
+        emailMatchSource: reviewerInfo?.matchSource ?? 'none',
         protocols: [],
       };
       const formType = reviewer.form_type?.trim() ?? '';
@@ -160,7 +283,7 @@ function buildRecipients(
         weekLabel: formatWeekLabel(weekId),
       });
 
-      recipients.set(reviewerId, recipient);
+      recipients.set(recipientId, recipient);
     }
   }
 
@@ -282,16 +405,194 @@ function buildEmailText(
   ].join('\n');
 }
 
+async function createMailBatch({
+  scope,
+  monthDocumentId,
+  weekId,
+  periodLabel,
+  recipients,
+  reviewerCount,
+  protocolCount,
+}: {
+  scope: NotificationPayload['scope'];
+  monthDocumentId: string;
+  weekId?: string;
+  periodLabel: string;
+  recipients: ReviewerEmailRecipient[];
+  reviewerCount: number;
+  protocolCount: number;
+}) {
+  const db = getServerFirestore();
+  const batchRef = doc(collection(db, 'mail_batches'));
+
+  await setDoc(batchRef, {
+    status: 'sending',
+    scope,
+    monthDocumentId,
+    weekId: weekId ?? '',
+    periodLabel,
+    reviewerCount,
+    protocolCount,
+    total: recipients.length,
+    pending: recipients.length,
+    sending: 0,
+    sent: 0,
+    skipped: 0,
+    failed: 0,
+    source: 'review-notifications',
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+    startedAt: serverTimestamp(),
+  });
+
+  return batchRef;
+}
+
+async function createMailLogItems({
+  batchId,
+  scope,
+  monthDocumentId,
+  weekId,
+  periodLabel,
+  recipients,
+}: {
+  batchId: string;
+  scope: NotificationPayload['scope'];
+  monthDocumentId: string;
+  weekId?: string;
+  periodLabel: string;
+  recipients: ReviewerEmailRecipient[];
+}): Promise<MailLogItem[]> {
+  const db = getServerFirestore();
+  const logItems: MailLogItem[] = [];
+
+  for (const recipient of recipients) {
+    const logRef = doc(collection(db, 'mail_logs'));
+
+    await setDoc(logRef, {
+      batchId,
+      status: 'pending',
+      scope,
+      monthDocumentId,
+      weekId: weekId ?? '',
+      periodLabel,
+      requestedReviewerId: recipient.requestedReviewerId,
+      reviewerId: recipient.id,
+      reviewerName: recipient.name,
+      email: recipient.email,
+      emailMatchSource: recipient.emailMatchSource,
+      protocolCount: recipient.protocols.length,
+      attempts: 0,
+      maxAttempts: getMaxSendAttempts(),
+      messageId: '',
+      lastError: '',
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+
+    logItems.push({
+      recipient,
+      logRef,
+      status: 'pending',
+    });
+  }
+
+  return logItems;
+}
+
+async function transitionMailLogStatus({
+  batchRef,
+  counts,
+  item,
+  nextStatus,
+  updates,
+}: {
+  batchRef: DocumentReference;
+  counts: MailBatchCounts;
+  item: MailLogItem;
+  nextStatus: MailDeliveryStatus;
+  updates?: Record<string, unknown>;
+}) {
+  counts[item.status] -= 1;
+  counts[nextStatus] += 1;
+  item.status = nextStatus;
+
+  await Promise.all([
+    updateDoc(item.logRef, {
+      status: nextStatus,
+      updatedAt: serverTimestamp(),
+      ...updates,
+    }),
+    updateDoc(batchRef, {
+      ...counts,
+      updatedAt: serverTimestamp(),
+    }),
+  ]);
+}
+
+function getCompletedBatchStatus(counts: MailBatchCounts): string {
+  if (counts.failed > 0 && counts.sent === 0 && counts.skipped === 0) {
+    return 'failed';
+  }
+
+  if (counts.failed > 0) {
+    return 'completed_with_errors';
+  }
+
+  return 'completed';
+}
+
+async function markBatchFailed(
+  batchRef: DocumentReference | null,
+  logItems: MailLogItem[],
+  counts: MailBatchCounts | null,
+  errorMessage: string
+) {
+  if (!batchRef || !counts) {
+    return;
+  }
+
+  for (const item of logItems) {
+    if (item.status === 'sent' || item.status === 'skipped' || item.status === 'failed') {
+      continue;
+    }
+
+    await transitionMailLogStatus({
+      batchRef,
+      counts,
+      item,
+      nextStatus: 'failed',
+      updates: {
+        lastError: errorMessage,
+        failedAt: serverTimestamp(),
+      },
+    });
+  }
+
+  await updateDoc(batchRef, {
+    status: 'failed',
+    lastError: errorMessage,
+    completedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+}
+
 export async function POST(request: NextRequest) {
+  let batchRef: DocumentReference | null = null;
+  let logItems: MailLogItem[] = [];
+  let counts: MailBatchCounts | null = null;
+
   try {
     const payload = validatePayload(await request.json());
-    const reviewerIds = Array.from(new Set(
-      payload.protocols.flatMap((protocol) =>
-        (protocol.reviewers ?? [])
-          .map((reviewer) => reviewer.id?.trim())
-          .filter(isNonEmptyString)
-      )
-    ));
+    const reviewerAssignments = payload.protocols.flatMap((protocol) =>
+      (protocol.reviewers ?? [])
+        .filter((reviewer) => isNonEmptyString(reviewer.id))
+        .map((reviewer) => ({
+          id: reviewer.id.trim(),
+          name: isNonEmptyString(reviewer.name) ? reviewer.name.trim() : reviewer.id.trim(),
+        }))
+    );
+    const reviewerIds = Array.from(new Set(reviewerAssignments.map((reviewer) => reviewer.id)));
 
     if (reviewerIds.length === 0) {
       return NextResponse.json({
@@ -302,66 +603,203 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    const reviewerEmailMap = await getReviewerEmailMap(reviewerIds);
+    const reviewerEmailMap = await getReviewerEmailMap(reviewerAssignments);
     const recipients = buildRecipients(payload.protocols, reviewerEmailMap, payload.weekId);
-    const transporter = getMailTransporter();
-    const from = getMailFrom();
     const systemUrl = getSystemUrl(request);
     const monthLabel = formatMonthLabel(payload.monthDocumentId);
     const periodLabel = payload.scope === 'month'
       ? monthLabel
       : `${monthLabel} ${formatWeekLabel(payload.weekId || '')}`;
+    const maxAttempts = getMaxSendAttempts();
+    const sendDelayMs = getSendDelayMs();
     const sent = [];
     const skipped = [];
     const failed = [];
 
-    for (const recipient of recipients) {
+    batchRef = await createMailBatch({
+      scope: payload.scope,
+      monthDocumentId: payload.monthDocumentId,
+      weekId: payload.weekId,
+      periodLabel,
+      recipients,
+      reviewerCount: reviewerIds.length,
+      protocolCount: payload.protocols.length,
+    });
+    logItems = await createMailLogItems({
+      batchId: batchRef.id,
+      scope: payload.scope,
+      monthDocumentId: payload.monthDocumentId,
+      weekId: payload.weekId,
+      periodLabel,
+      recipients,
+    });
+    counts = {
+      pending: recipients.length,
+      sending: 0,
+      sent: 0,
+      skipped: 0,
+      failed: 0,
+    };
+
+    const transporter = getMailTransporter();
+    const from = getMailFrom();
+
+    for (let index = 0; index < logItems.length; index += 1) {
+      const item = logItems[index];
+      const recipient = item.recipient;
+
       if (!recipient.email) {
+        const skipReason = recipient.emailMatchSource === 'none'
+          ? 'Reviewer assignment did not match a reviewer record by ID or name.'
+          : 'Reviewer record has no email address.';
+
         skipped.push({
           reviewerId: recipient.id,
           reviewerName: recipient.name,
           protocolCount: recipient.protocols.length,
-          reason: 'No email address in reviewers collection.',
+          reason: skipReason,
+        });
+
+        await transitionMailLogStatus({
+          batchRef,
+          counts,
+          item,
+          nextStatus: 'skipped',
+          updates: {
+            reason: skipReason,
+            skippedAt: serverTimestamp(),
+          },
         });
         continue;
       }
 
-      try {
-        const result = await transporter.sendMail({
-          from,
-          to: {
-            name: recipient.name,
-            address: recipient.email,
-          },
-          subject: `e-REC Review Assignments - ${periodLabel}`,
-          html: buildEmailHtml(recipient, systemUrl, periodLabel),
-          text: buildEmailText(recipient, systemUrl, periodLabel),
+      await transitionMailLogStatus({
+        batchRef,
+        counts,
+        item,
+        nextStatus: 'sending',
+        updates: {
+          sendingAt: serverTimestamp(),
+          attempts: 0,
+          lastError: '',
+        },
+      });
+
+      let messageId = '';
+      let lastError = '';
+      let wasSent = false;
+      let attemptsUsed = 0;
+
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        attemptsUsed = attempt;
+
+        await updateDoc(item.logRef, {
+          attempts: attempt,
+          lastAttemptAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
         });
 
+        try {
+          const result = await transporter.sendMail({
+            from,
+            to: {
+              name: recipient.name,
+              address: recipient.email,
+            },
+            subject: `e-REC Review Assignments - ${periodLabel}`,
+            html: buildEmailHtml(recipient, systemUrl, periodLabel),
+            text: buildEmailText(recipient, systemUrl, periodLabel),
+          });
+
+          messageId = result.messageId;
+          wasSent = true;
+          break;
+        } catch (error) {
+          lastError = getErrorMessage(error);
+
+          await updateDoc(item.logRef, {
+            attempts: attempt,
+            lastError,
+            updatedAt: serverTimestamp(),
+          });
+
+          if (attempt < maxAttempts) {
+            await sleep(Math.min(sendDelayMs * attempt, 5000));
+          }
+        }
+      }
+
+      if (wasSent) {
         sent.push({
           reviewerId: recipient.id,
           reviewerName: recipient.name,
           email: recipient.email,
           protocolCount: recipient.protocols.length,
-          messageId: result.messageId,
+          messageId,
+          attempts: attemptsUsed,
         });
-      } catch (error) {
+
+        await transitionMailLogStatus({
+          batchRef,
+          counts,
+          item,
+          nextStatus: 'sent',
+          updates: {
+            attempts: attemptsUsed,
+            messageId,
+            lastError: '',
+            sentAt: serverTimestamp(),
+          },
+        });
+      } else {
         failed.push({
           reviewerId: recipient.id,
           reviewerName: recipient.name,
           email: recipient.email,
           protocolCount: recipient.protocols.length,
-          error: error instanceof Error ? error.message : 'Unknown mail sending error.',
+          attempts: attemptsUsed,
+          error: lastError || 'Unknown mail sending error.',
         });
+
+        await transitionMailLogStatus({
+          batchRef,
+          counts,
+          item,
+          nextStatus: 'failed',
+          updates: {
+            attempts: attemptsUsed,
+            lastError: lastError || 'Unknown mail sending error.',
+            failedAt: serverTimestamp(),
+          },
+        });
+      }
+
+      if (index < logItems.length - 1 && sendDelayMs > 0) {
+        await sleep(sendDelayMs);
       }
     }
 
-    return NextResponse.json({ sent, skipped, failed });
+    const status = getCompletedBatchStatus(counts);
+
+    await updateDoc(batchRef, {
+      status,
+      lastError: failed[0]?.error ?? '',
+      completedAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+
+    return NextResponse.json({ batchId: batchRef.id, status, sent, skipped, failed });
   } catch (error) {
+    const message = getErrorMessage(error);
+
+    await markBatchFailed(batchRef, logItems, counts, message);
     console.error('Failed to send review notifications:', error);
 
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Failed to send review notifications.' },
+      {
+        error: message,
+        batchId: batchRef?.id,
+      },
       { status: 400 }
     );
   }

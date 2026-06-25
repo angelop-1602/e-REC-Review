@@ -183,7 +183,7 @@ export default function ProtocolsPage() {
 
       setNotice({
         type: result.failed?.length > 0 ? 'error' : 'success',
-        message: `${scope === 'month' ? month.monthLabel : `${month.monthLabel} ${week?.weekLabel}`}: ${formatNotificationSummary(result as SendSummary)}.`,
+        message: `${scope === 'month' ? month.monthLabel : `${month.monthLabel} ${week?.weekLabel}`}: ${formatNotificationSummary(result as SendSummary)}. Track details on the Mailing page.`,
       });
     } catch (sendError) {
       console.error('Failed to send reviewer notifications:', sendError);

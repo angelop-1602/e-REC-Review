@@ -1,1130 +1,991 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { collection, getDocs, query, collectionGroup, orderBy, limit } from 'firebase/firestore';
-import { db } from '@/lib/firebaseconfig';
 import Link from 'next/link';
-import { isOverdue, isDueSoon, formatDate } from '@/lib/utils';
-import ProtocolStatusCard from '@/components/ProtocolStatusCard';
-import dynamic from 'next/dynamic';
+import type { ReactNode } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { collection, collectionGroup, getDocs, query } from 'firebase/firestore';
+import {
+  HiOutlineArrowRight,
+  HiOutlineArrowUpTray,
+  HiOutlineBellAlert,
+  HiOutlineCheckCircle,
+  HiOutlineClipboardDocumentList,
+  HiOutlineClock,
+  HiOutlineDocumentText,
+  HiOutlineExclamationTriangle,
+  HiOutlineFolderOpen,
+  HiOutlineUsers,
+} from 'react-icons/hi2';
+import { db } from '@/lib/firebaseconfig';
+import {
+  WEEK_IDS,
+  formatMonthLabel,
+  formatWeekLabel,
+  getProtocolPathParts,
+  groupProtocolsByMonth,
+  normalizeProtocolData,
+  type MonthGroup,
+  type Protocol,
+} from '@/lib/protocols';
+import { formatDate, isDueSoon, isOverdue } from '@/lib/utils';
 
-// Dynamically import Chart.js to avoid SSR issues
-const Chart = dynamic(
-  () => import('react-chartjs-2').then((mod) => mod.Bar),
-  { ssr: false }
-);
+type NoticeType = 'success' | 'warning' | 'danger' | 'neutral';
 
-// Dynamically import Chart.js registry
-const ChartRegistry = dynamic(
-  () => import('@/components/ChartRegistry'),
-  { ssr: false }
-);
-
-interface Reviewer {
+interface ReviewAssignment {
   id: string;
-  name: string;
+  protocolId: string;
+  spupRecCode: string;
+  title: string;
+  reviewerId: string;
+  reviewerName: string;
   status: string;
-  document_type?: string;
-  form_type?: string;
-  due_date?: string;
-  completed_at?: string;
+  dueDate: string;
+  monthId: string;
+  weekId: string;
+  monthLabel: string;
+  weekLabel: string;
 }
 
-interface Protocol {
-  id: string;
-  protocol_name: string;
-  release_period: string;
-  academic_level: string;
-  reviewer?: string;
-  reviewers?: Reviewer[];
-  due_date: string;
-  status: string;
-  protocol_file: string;
-  document_type?: string;
-  created_at: string;
-  reviewerCount?: number;
-  completedReviewerCount?: number;
-  research_title?: string;
-  e_link?: string;
-  course_program?: string;
-  spup_rec_code?: string;
-  principal_investigator?: string;
-  adviser?: string;
-  _path?: string;
+interface MonthActivity {
+  month: MonthGroup;
+  reviewTotal: number;
+  reviewCompleted: number;
+  active: number;
+  overdue: number;
+}
+
+interface ReviewerSpeed {
+  reviewerId: string;
+  reviewerName: string;
+  assignedCount: number;
+  completedCount: number;
+  pendingCount: number;
+  overdueCount: number;
+  scoreDays: number | null;
+  completedAverageDays: number | null;
+  longestOpenDays: number | null;
+  completionRate: number;
+}
+
+function getWeekHref(monthId: string, weekId: string): string {
+  return `/admin/protocols/months/${encodeURIComponent(monthId)}/weeks/${encodeURIComponent(weekId)}`;
+}
+
+function safeFormatDate(date: string): string {
+  return date ? formatDate(date) : 'No date set';
+}
+
+function getDateValue(value: unknown): Date | null {
+  if (!value) {
+    return null;
+  }
+
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return value;
+  }
+
+  if (typeof value === 'string' && value.trim()) {
+    const date = new Date(value);
+
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  if (typeof value === 'object' && 'toDate' in value) {
+    try {
+      const date = (value as { toDate: () => Date }).toDate();
+
+      return Number.isNaN(date.getTime()) ? null : date;
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+function getDayDifference(start: Date, end: Date): number {
+  const diff = end.getTime() - start.getTime();
+
+  return Math.max(diff / (1000 * 60 * 60 * 24), 0);
+}
+
+function getCompletionPercent(completed: number, total: number): number {
+  if (total <= 0) {
+    return 0;
+  }
+
+  return Math.round((completed / total) * 100);
+}
+
+function formatCompactDays(days: number | null): string {
+  if (days === null) {
+    return 'N/A';
+  }
+
+  return `${days.toFixed(1)}d`;
+}
+
+function getProtocolReviewTotals(protocol: Protocol) {
+  if (protocol.reviewers && protocol.reviewers.length > 0) {
+    return {
+      total: protocol.reviewers.length,
+      completed: protocol.reviewers.filter((reviewer) => reviewer.status === 'Completed').length,
+    };
+  }
+
+  return {
+    total: protocol.reviewer ? 1 : 0,
+    completed: protocol.status === 'Completed' ? 1 : 0,
+  };
+}
+
+function getProtocolState(protocol: Protocol): 'Completed' | 'Partially Completed' | 'In Progress' | 'Overdue' | 'Due Soon' {
+  const reviewTotals = getProtocolReviewTotals(protocol);
+
+  if (reviewTotals.total > 0 && reviewTotals.completed === reviewTotals.total) {
+    return 'Completed';
+  }
+
+  if (protocol.status === 'Completed') {
+    return 'Completed';
+  }
+
+  if (protocol.reviewers?.some((reviewer) => reviewer.status !== 'Completed' && isOverdue(reviewer.due_date || protocol.due_date))) {
+    return 'Overdue';
+  }
+
+  if (protocol.due_date && isOverdue(protocol.due_date)) {
+    return 'Overdue';
+  }
+
+  if (protocol.reviewers?.some((reviewer) => reviewer.status !== 'Completed' && isDueSoon(reviewer.due_date || protocol.due_date))) {
+    return 'Due Soon';
+  }
+
+  if (protocol.due_date && isDueSoon(protocol.due_date)) {
+    return 'Due Soon';
+  }
+
+  if (reviewTotals.completed > 0) {
+    return 'Partially Completed';
+  }
+
+  return 'In Progress';
+}
+
+function getReviewAssignments(protocols: Protocol[]): ReviewAssignment[] {
+  return protocols.flatMap((protocol) => {
+    const base = {
+      protocolId: protocol.id,
+      spupRecCode: protocol.spup_rec_code || protocol.id,
+      title: protocol.research_title || protocol.protocol_name || 'Untitled protocol',
+      monthId: protocol.monthId,
+      weekId: protocol.weekId,
+      monthLabel: formatMonthLabel(protocol.monthId),
+      weekLabel: formatWeekLabel(protocol.weekId),
+    };
+
+    if (protocol.reviewers && protocol.reviewers.length > 0) {
+      return protocol.reviewers.map((reviewer, index) => ({
+        ...base,
+        id: `${protocol.monthId}/${protocol.weekId}/${protocol.id}/${reviewer.id || index}`,
+        reviewerId: reviewer.id || reviewer.name || 'reviewer',
+        reviewerName: reviewer.name || reviewer.id || 'Unassigned reviewer',
+        status: reviewer.status || 'In Progress',
+        dueDate: reviewer.due_date || protocol.due_date,
+      }));
+    }
+
+    if (protocol.reviewer) {
+      return [{
+        ...base,
+        id: `${protocol.monthId}/${protocol.weekId}/${protocol.id}/${protocol.reviewer}`,
+        reviewerId: protocol.reviewer,
+        reviewerName: protocol.reviewer,
+        status: protocol.status || 'In Progress',
+        dueDate: protocol.due_date,
+      }];
+    }
+
+    return [];
+  });
+}
+
+function sortByDueDate(left: ReviewAssignment, right: ReviewAssignment) {
+  const leftDate = left.dueDate || '9999-12-31';
+  const rightDate = right.dueDate || '9999-12-31';
+
+  return leftDate.localeCompare(rightDate);
+}
+
+function getBadgeClasses(type: NoticeType): string {
+  const classes: Record<NoticeType, string> = {
+    success: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    warning: 'bg-amber-50 text-amber-700 border-amber-200',
+    danger: 'bg-red-50 text-red-700 border-red-200',
+    neutral: 'bg-slate-50 text-slate-700 border-slate-200',
+  };
+
+  return classes[type];
+}
+
+function getProtocolStatusStyle(status: ReturnType<typeof getProtocolState>) {
+  if (status === 'Completed') {
+    return 'bg-emerald-50 text-emerald-700 border-emerald-200';
+  }
+
+  if (status === 'Overdue') {
+    return 'bg-red-50 text-red-700 border-red-200';
+  }
+
+  if (status === 'Due Soon') {
+    return 'bg-amber-50 text-amber-700 border-amber-200';
+  }
+
+  if (status === 'Partially Completed') {
+    return 'bg-sky-50 text-sky-700 border-sky-200';
+  }
+
+  return 'bg-slate-50 text-slate-700 border-slate-200';
+}
+
+function StatTile({
+  label,
+  value,
+  hint,
+  tone,
+  icon,
+}: {
+  label: string;
+  value: string | number;
+  hint: string;
+  tone: NoticeType;
+  icon: ReactNode;
+}) {
+  return (
+    <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-medium text-slate-500">{label}</p>
+          <p className="mt-2 text-3xl font-semibold tracking-normal text-slate-950">{value}</p>
+          <p className="mt-1 text-sm text-slate-500">{hint}</p>
+        </div>
+        <div className={`rounded-md border p-2 ${getBadgeClasses(tone)}`}>
+          {icon}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function SectionHeader({
+  title,
+  detail,
+  href,
+  action,
+}: {
+  title: string;
+  detail?: string;
+  href?: string;
+  action?: string;
+}) {
+  return (
+    <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-4 py-3">
+      <div>
+        <h2 className="text-base font-semibold text-slate-950">{title}</h2>
+        {detail && <p className="mt-1 text-sm text-slate-500">{detail}</p>}
+      </div>
+      {href && action && (
+        <Link href={href} className="inline-flex items-center gap-1 text-sm font-medium text-emerald-700 hover:text-emerald-900">
+          {action}
+          <HiOutlineArrowRight className="h-4 w-4" />
+        </Link>
+      )}
+    </div>
+  );
+}
+
+function EmptyState({ message }: { message: string }) {
+  return (
+    <div className="px-4 py-8 text-center text-sm text-slate-500">
+      {message}
+    </div>
+  );
+}
+
+function MonthStatusChart({ activity }: { activity: MonthActivity[] }) {
+  if (activity.length === 0) {
+    return <EmptyState message="No month activity available for charting." />;
+  }
+
+  return (
+    <div className="space-y-4 p-4">
+      <div className="flex flex-wrap gap-3 text-xs text-slate-600">
+        <span className="inline-flex items-center gap-1">
+          <span className="h-2.5 w-2.5 rounded-sm bg-emerald-600" />
+          Completed
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <span className="h-2.5 w-2.5 rounded-sm bg-sky-500" />
+          Active
+        </span>
+        <span className="inline-flex items-center gap-1">
+          <span className="h-2.5 w-2.5 rounded-sm bg-red-500" />
+          Overdue
+        </span>
+      </div>
+
+      <div className="space-y-4">
+        {activity.map((item) => {
+          const total = Math.max(item.reviewTotal, 1);
+          const completed = item.reviewCompleted;
+          const overdue = item.overdue;
+          const active = Math.max(item.active - item.overdue, 0);
+          const completedWidth = getCompletionPercent(completed, total);
+          const overdueWidth = getCompletionPercent(overdue, total);
+          const activeWidth = Math.max(0, 100 - completedWidth - overdueWidth);
+
+          return (
+            <div key={item.month.monthId} className="space-y-2">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold text-slate-950">{item.month.monthLabel}</p>
+                  <p className="text-xs text-slate-500">{item.month.protocols.length} protocols</p>
+                </div>
+                <p className="text-xs font-medium text-slate-500">{item.reviewTotal} reviews</p>
+              </div>
+
+              <div className="h-3 overflow-hidden rounded-full bg-slate-100">
+                {completed > 0 && (
+                  <div
+                    className="inline-block h-full bg-emerald-600 align-top"
+                    style={{ width: `${completedWidth}%` }}
+                  />
+                )}
+                {active > 0 && (
+                  <div
+                    className="inline-block h-full bg-sky-500 align-top"
+                    style={{ width: `${activeWidth}%` }}
+                  />
+                )}
+                {overdue > 0 && (
+                  <div
+                    className="inline-block h-full bg-red-500 align-top"
+                    style={{ width: `${overdueWidth}%` }}
+                  />
+                )}
+              </div>
+
+              <div className="grid grid-cols-3 gap-2 text-xs text-slate-500">
+                <span>{completed} completed</span>
+                <span>{active} active</span>
+                <span>{overdue} overdue</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function ReviewerSpeedChart({ reviewers }: { reviewers: ReviewerSpeed[] }) {
+  if (reviewers.length === 0) {
+    return <EmptyState message="No reviewer assignments with usable upload dates are available yet." />;
+  }
+
+  const scoredReviewers = reviewers.filter((reviewer) => reviewer.scoreDays !== null);
+  const fastestScore = scoredReviewers.length > 0 ? Math.min(...scoredReviewers.map((reviewer) => reviewer.scoreDays ?? 0)) : 0;
+  const slowestScore = scoredReviewers.length > 0 ? Math.max(...scoredReviewers.map((reviewer) => reviewer.scoreDays ?? 0), fastestScore + 1) : fastestScore + 1;
+  const scoreRange = Math.max(slowestScore - fastestScore, 1);
+  const pendingTotal = reviewers.reduce((sum, reviewer) => sum + reviewer.pendingCount, 0);
+  const overdueTotal = reviewers.reduce((sum, reviewer) => sum + reviewer.overdueCount, 0);
+
+  return (
+    <div className="space-y-3 p-4">
+      <div className="grid grid-cols-3 overflow-hidden rounded-md border border-slate-200 bg-slate-50 text-xs">
+        <div className="border-r border-slate-200 px-3 py-2">
+          <p className="text-slate-500">Reviewers</p>
+          <p className="mt-1 text-base font-semibold text-slate-950">{reviewers.length}</p>
+        </div>
+        <div className="border-r border-slate-200 px-3 py-2">
+          <p className="text-slate-500">Pending</p>
+          <p className="mt-1 text-base font-semibold text-amber-700">{pendingTotal}</p>
+        </div>
+        <div className="px-3 py-2">
+          <p className="text-slate-500">Overdue</p>
+          <p className="mt-1 text-base font-semibold text-red-700">{overdueTotal}</p>
+        </div>
+      </div>
+
+      <p className="text-xs text-slate-500">
+        Score uses completed review days plus pending reviews counted as days open today. Lower score means faster response with less open delay.
+      </p>
+
+      <div className="max-h-96 overflow-y-auto rounded-md border border-slate-200">
+        <div className="divide-y divide-slate-100">
+          {reviewers.map((reviewer, index) => {
+            const speedPercent = reviewer.scoreDays === null
+              ? 18
+              : Math.max(18, Math.round(100 - ((reviewer.scoreDays - fastestScore) / scoreRange) * 72));
+            const barClass = reviewer.overdueCount > 0
+              ? 'bg-red-500'
+              : reviewer.pendingCount > reviewer.completedCount
+                ? 'bg-amber-500'
+                : index < 3
+                  ? 'bg-emerald-600'
+                  : 'bg-sky-500';
+
+            return (
+              <div key={reviewer.reviewerId} className="grid grid-cols-1 gap-3 px-3 py-2.5 lg:grid-cols-[minmax(0,1fr)_22rem] lg:items-center">
+                <div className="min-w-0 space-y-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-slate-100 text-xs font-semibold text-slate-600">
+                        {index + 1}
+                      </span>
+                      <p className="truncate text-sm font-semibold text-slate-950">{reviewer.reviewerName}</p>
+                    </div>
+                    <p className="shrink-0 text-sm font-semibold text-slate-950">{formatCompactDays(reviewer.scoreDays)}</p>
+                  </div>
+
+                  <div className="h-2 rounded-full bg-slate-100">
+                    <div className={`h-2 rounded-full ${barClass}`} style={{ width: `${speedPercent}%` }} />
+                  </div>
+
+                  <p className="truncate text-xs text-slate-500">
+                    Completed avg {formatCompactDays(reviewer.completedAverageDays)} - longest open {formatCompactDays(reviewer.longestOpenDays)}
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-4 gap-2 text-xs">
+                  <div className="rounded-md bg-slate-50 px-2 py-1.5">
+                    <p className="text-slate-500">Done</p>
+                    <p className="mt-1 font-semibold text-slate-950">
+                      {reviewer.completedCount}/{reviewer.assignedCount}
+                    </p>
+                  </div>
+                  <div className="rounded-md bg-slate-50 px-2 py-1.5">
+                    <p className="text-slate-500">Rate</p>
+                    <p className="mt-1 font-semibold text-slate-950">{reviewer.completionRate}%</p>
+                  </div>
+                  <div className="rounded-md bg-amber-50 px-2 py-1.5">
+                    <p className="text-amber-700">Pending</p>
+                    <p className="mt-1 font-semibold text-amber-900">{reviewer.pendingCount}</p>
+                  </div>
+                  <div className="rounded-md bg-red-50 px-2 py-1.5">
+                    <p className="text-red-700">Late</p>
+                    <p className="mt-1 font-semibold text-red-900">{reviewer.overdueCount}</p>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export default function AdminDashboard() {
+  const [protocols, setProtocols] = useState<Protocol[]>([]);
+  const [reviewerCount, setReviewerCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [, setOverdueProtocols] = useState<Protocol[]>([]);
-  const [upcomingDueProtocols, setUpcomingDueProtocols] = useState<Protocol[]>([]);
-  const [recentProtocols, setRecentProtocols] = useState<Protocol[]>([]);
-  const [overdueReviewers, setOverdueReviewers] = useState<{
-    protocolId: string;
-    spupRecCode: string;
-    reviewerId: string;
-    reviewerName: string;
-    dueDate: string;
-    protocolPath?: string;
-  }[]>([]);
-  const [dueSoonReviewers, setDueSoonReviewers] = useState<{
-    protocolId: string;
-    spupRecCode: string;
-    reviewerId: string;
-    reviewerName: string;
-    dueDate: string;
-    protocolPath?: string;
-  }[]>([]);
-  const [, setReviewerStats] = useState<{
-    reviewerId: string;
-    name: string;
-    assigned: number;
-    completed: number;
-    overdue: number;
-  }[]>([]);
-  const [fastestReviewers, setFastestReviewers] = useState<{
-    reviewerId: string;
-    name: string;
-    averageCompletionDays: number;
-    completedCount: number;
-  }[]>([]);
-  const [stats, setStats] = useState({
-    totalProtocols: 0,
-    totalReviews: 0,
-    overdueCount: 0,
-    completedCount: 0,
-    inProgressCount: 0,
-    dueSoonCount: 0
-  });
-  const [chartData, setChartData] = useState<{
-    labels: string[];
-    datasets: {
-      label: string;
-      data: number[];
-      backgroundColor: string;
-    }[];
-  }>({
-    labels: [],
-    datasets: []
-  });
-  const [reassignmentStats, setReassignmentStats] = useState<{ reviewer: string; count: number }[]>([]);
-  
-  // Helper function to ensure due dates are in the correct format
-  const ensureValidDueDate = (dueDate: string | Date | { toDate(): Date } | undefined): string => {
-    if (!dueDate) return '';
-    
-    // If it's already a string in YYYY-MM-DD format, return it
-    if (typeof dueDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dueDate)) {
-      return dueDate;
-    }
-    
-    // If it's a timestamp object from Firestore
-    if (dueDate && typeof dueDate === 'object' && 'toDate' in dueDate) {
-      try {
-        const date = dueDate.toDate();
-        return date.toISOString().split('T')[0]; // Get YYYY-MM-DD part
-      } catch (err) {
-        console.error('Error converting timestamp to date:', err);
-      }
-    }
-    
-    // If it's a date string but not in YYYY-MM-DD format, try to convert it
-    if (typeof dueDate === 'string' && dueDate.trim() !== '') {
-      try {
-        const date = new Date(dueDate);
-        if (!isNaN(date.getTime())) {
-          return date.toISOString().split('T')[0]; // Get YYYY-MM-DD part
-        }
-      } catch (err) {
-        console.error('Error parsing date string:', err);
-      }
-    }
-    
-    // If we got here, we couldn't parse the due date
-    console.warn(`Could not parse due date: ${dueDate}`);
-    return '';
-  };
-  
-  // Helper function to get the most relevant due date from a protocol
-  const getLatestDueDate = (protocol: Protocol): string => {
-    // If protocol has no reviewers array or it's empty, use the protocol's due date
-    if (!protocol.reviewers || protocol.reviewers.length === 0) {
-      return ensureValidDueDate(protocol.due_date);
-    }
-    
-    // Get current date to identify in-progress reviews
-    const today = new Date().toISOString().split('T')[0];
-    
-    // Filter to only include active (non-completed) reviewers
-    const activeReviewers = protocol.reviewers.filter(r => r.status !== 'Completed');
-    
-    // If there are no active reviewers, get the latest due date from all reviewers
-    if (activeReviewers.length === 0) {
-      // For protocols that are fully completed, find the latest due date from any reviewer
-      const allDueDates = protocol.reviewers
-        .map(r => ensureValidDueDate(r.due_date))
-        .filter(date => date !== '')
-        .sort((a, b) => b.localeCompare(a)); // Sort desc
-        
-      return allDueDates.length > 0 ? allDueDates[0] : ensureValidDueDate(protocol.due_date);
-    }
-    
-    // Find the earliest upcoming due date among active reviewers
-    const upcomingDueDates = activeReviewers
-      .map(r => ensureValidDueDate(r.due_date))
-      .filter(date => date !== '' && date >= today)
-      .sort(); // Sort asc
-      
-    // If there are upcoming due dates, use the earliest one
-    if (upcomingDueDates.length > 0) {
-      return upcomingDueDates[0];
-    }
-    
-    // If there are no upcoming due dates, get the most recent overdue date
-    const overdueDates = activeReviewers
-      .map(r => ensureValidDueDate(r.due_date))
-      .filter(date => date !== '' && date < today)
-      .sort((a, b) => b.localeCompare(a)); // Sort desc
-      
-    if (overdueDates.length > 0) {
-      return overdueDates[0];
-    }
-    
-    // Fallback to protocol's due date if no reviewer due dates are available
-    return ensureValidDueDate(protocol.due_date);
-  };
-  
+
   useEffect(() => {
     const fetchDashboardData = async () => {
       try {
         setLoading(true);
-        
-        // Initialize array to hold all protocols
-        const protocols: Protocol[] = [];
-        
-        // Query the new hierarchical structure
-        console.log('Fetching protocols from Firebase...');
-        
-        // First, attempt to use collectionGroup query for most efficient retrieval
-        try {
-          console.log("Attempting collectionGroup query...");
-          
-          // Use collection group queries to get all protocol documents across all subcollections
-          // For each potential week collection (week-1, week-2, etc.)
-          for (let weekNum = 1; weekNum <= 4; weekNum++) {
-            const weekCollection = `week-${weekNum}`;
-            console.log(`Querying collection group: ${weekCollection}`);
-            const protocolsGroupQuery = query(collectionGroup(db, weekCollection));
-            const protocolsGroupSnapshot = await getDocs(protocolsGroupQuery);
-            
-            console.log(`Found ${protocolsGroupSnapshot.size} documents in ${weekCollection}`);
-            
-            // Process protocols from the collection group query
-            for (const protocolDoc of protocolsGroupSnapshot.docs) {
-              const data = protocolDoc.data() as Protocol;
-              const path = protocolDoc.ref.path;
-              
-              // Extract the month and week from the path
-              // Path format: "protocols/{month}/{week}/{SPUP_REC_Code}"
-              const pathParts = path.split('/');
-              if (pathParts.length < 4) {
-                console.log(`Invalid path format for protocol: ${path}`);
-                continue;
-              }
-              
-              const monthId = pathParts[1];
-              const weekId = pathParts[2];
-              
-              // Create a mapped protocol that works with our UI
-              const mappedProtocol: Protocol = {
-                ...data,
-                id: protocolDoc.id,
-                // Map new field names to consistent names for the UI
-                protocol_name: data.research_title || '',
-                protocol_file: data.e_link || '',
-                release_period: `${monthId} ${weekId}`,
-                academic_level: data.course_program || '',
-                // Ensure the due date is valid and in the correct format
-                due_date: ensureValidDueDate(data.due_date),
-                // Add missing required fields with defaults if not present in data
-                status: data.status || 'In Progress',
-                created_at: data.created_at || new Date().toISOString(),
-                // Add metadata for tracking
-                _path: `${monthId}/${weekId}/${protocolDoc.id}`
-              };
-              
-              protocols.push(mappedProtocol);
+        setError(null);
+
+        const fetchedProtocols: Protocol[] = [];
+
+        for (const weekId of WEEK_IDS) {
+          const protocolsGroupQuery = query(collectionGroup(db, weekId));
+          const protocolsGroupSnapshot = await getDocs(protocolsGroupQuery);
+
+          for (const protocolDoc of protocolsGroupSnapshot.docs) {
+            const pathParts = getProtocolPathParts(protocolDoc.ref.path);
+
+            if (!pathParts) {
+              continue;
             }
-          }
-        } catch (err) {
-          console.error("CollectionGroup query failed, falling back to hierarchical queries:", err);
-          
-          // Fallback to hierarchical queries if collectionGroup is not set up
-          // First get all month documents
-          const monthsRef = collection(db, 'protocols');
-          console.log(`Fetching months from protocols collection...`);
-          const monthsSnapshot = await getDocs(monthsRef);
-          console.log(`Found ${monthsSnapshot.docs.length} documents in protocols collection`);
-          
-          // For each month, get all weeks
-          for (const monthDoc of monthsSnapshot.docs) {
-            const monthId = monthDoc.id;
-            console.log(`Processing month: ${monthId}`);
-            
-            try {
-              // Get weeks within this month
-              const weeksRef = collection(monthDoc.ref, monthId);
-              console.log(`Fetching weeks for month ${monthId}...`);
-              const weeksSnapshot = await getDocs(weeksRef);
-              console.log(`Found ${weeksSnapshot.docs.length} weeks for month ${monthId}`);
-              
-              // For each week, get all protocols
-              for (const weekDoc of weeksSnapshot.docs) {
-                const weekId = weekDoc.id;
-                console.log(`Processing week: ${weekId} in month ${monthId}`);
-                
-                // Get protocols within this week
-                const protocolsRef = collection(weekDoc.ref, weekId);
-                console.log(`Fetching protocols for ${monthId}/${weekId}...`);
-                const protocolsSnapshot = await getDocs(protocolsRef);
-                console.log(`Found ${protocolsSnapshot.docs.length} protocols in ${monthId}/${weekId}`);
-                
-                for (const protocolDoc of protocolsSnapshot.docs) {
-                  const data = protocolDoc.data();
-                  
-                  // Create a mapped protocol that works with our UI
-                  const mappedProtocol: Protocol = {
-                    ...data,
-                    id: protocolDoc.id,
-                    // Map new field names to consistent names for the UI
-                    protocol_name: data.research_title || '',
-                    protocol_file: data.e_link || '',
-                    release_period: `${monthId} ${weekId}`,
-                    academic_level: data.course_program || '',
-                    // Ensure the due date is valid and in the correct format
-                    due_date: ensureValidDueDate(data.due_date),
-                    // Add missing required fields with defaults if not present in data
-                    status: data.status || 'In Progress',
-                    created_at: data.created_at || new Date().toISOString(),
-                    // Add metadata for tracking
-                    _path: `${monthId}/${weekId}/${protocolDoc.id}`
-                  };
-                  
-                  protocols.push(mappedProtocol);
-                }
-              }
-            } catch (err) {
-              console.error(`Error fetching protocols for month ${monthId}:`, err);
-              // Continue with other months even if one fails
-            }
+
+            fetchedProtocols.push(
+              normalizeProtocolData(protocolDoc.id, protocolDoc.data(), pathParts.monthId, pathParts.weekId)
+            );
           }
         }
-        
-        console.log(`Fetched a total of ${protocols.length} protocols.`);
-        
-        // Group protocols by protocol_name
-        const protocolGroups = protocols.reduce((acc, protocol) => {
-          const key = protocol.protocol_name || 'Unknown';
-          if (!acc[key]) {
-            acc[key] = [];
-          }
-          acc[key].push(protocol);
-          return acc;
-        }, {} as Record<string, Protocol[]>);
-        
-        // Create a grouped version of protocols (one entry per protocol_name)
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const groupedProtocols = Object.entries(protocolGroups).map(([_, items]) => {
-          // Use the first protocol as the base
-          const baseProtocol = { ...items[0] };
-          
-          // Count completed and total reviewers
-          const reviewerCount = items.reduce((count, p) => {
-            if (p.reviewers && p.reviewers.length > 0) {
-              return count + p.reviewers.length;
-            } else if (p.reviewer) {
-              return count + 1;
-            }
-            return count;
-          }, 0);
-          
-          const completedReviewerCount = items.reduce((count, p) => {
-            if (p.reviewers && p.reviewers.length > 0) {
-              return count + p.reviewers.filter(r => r.status === 'Completed').length;
-            } else if (p.status === 'Completed') {
-              return count + 1;
-            }
-            return count;
-          }, 0);
-          
-          // Determine overall status
-          let overallStatus = 'In Progress';
-          if (reviewerCount > 0 && completedReviewerCount === reviewerCount) {
-            overallStatus = 'Completed';
-          } else if (completedReviewerCount > 0) {
-            overallStatus = 'Partially Completed';
-          }
-          
-          return {
-            ...baseProtocol,
-            status: overallStatus,
-            reviewerCount,
-            completedReviewerCount,
-          };
-        });
-        
-        // Calculate stats
-        const uniqueProtocolCount = Object.keys(protocolGroups).length;
-        const completed = groupedProtocols.filter(p => p.status === 'Completed').length;
-        const partiallyCompleted = groupedProtocols.filter(p => p.status === 'Partially Completed').length;
-        const inProgress = groupedProtocols.filter(p => p.status === 'In Progress').length;
-        
-        // Get current date
-        const today = new Date();
-        const todayStr = today.toISOString().split('T')[0];
-        
-        // Calculate overdue protocols - only include protocols that have a due date
-        const overdue = groupedProtocols.filter(p => {
-          return p.status !== 'Completed' && 
-                 p.due_date && 
-                 p.due_date.trim() !== '' && 
-                 p.due_date < todayStr;
-        });
-        
-        // Calculate upcoming due protocols (due in the next 7 days) - only include protocols that have a due date
-        const nextWeek = new Date();
-        nextWeek.setDate(today.getDate() + 7);
-        const nextWeekStr = nextWeek.toISOString().split('T')[0];
-        
-        const upcoming = groupedProtocols.filter(p => {
-          return p.status !== 'Completed' && 
-                 p.due_date && 
-                 p.due_date.trim() !== '' && 
-                 p.due_date >= todayStr && 
-                 p.due_date <= nextWeekStr;
-        });
-        
-        // Sort by due date (ascending for overdue and upcoming)
-        const sortedOverdue = [...overdue].sort((a, b) => a.due_date.localeCompare(b.due_date));
-        const sortedUpcoming = [...upcoming].sort((a, b) => a.due_date.localeCompare(b.due_date));
-        
-        // Get recent protocols (sorted by created_at, desc)
-        const sortedRecent = [...groupedProtocols]
-          .sort((a, b) => {
-            const dateA = new Date(a.created_at).getTime();
-            const dateB = new Date(b.created_at).getTime();
-            return dateB - dateA;
-          })
-          .slice(0, 5);
-        
-        // Calculate reviewer stats - only count protocols with due dates for overdue stats
-        const reviewersMap = new Map<string, {
-          name: string;
-          assigned: number;
-          completed: number;
-          overdue: number;
-        }>();
-        
-        protocols.forEach(protocol => {
-          // Handle protocols with reviewers array
-          if (protocol.reviewers && protocol.reviewers.length > 0) {
-            protocol.reviewers.forEach(reviewer => {
-              const reviewerStats = reviewersMap.get(reviewer.id) || {
-                name: reviewer.name,
-                assigned: 0,
-                completed: 0,
-                overdue: 0
-              };
-              
-              reviewerStats.assigned++;
-              
-              if (reviewer.status === 'Completed') {
-                reviewerStats.completed++;
-              }
-              
-              if (reviewer.status !== 'Completed' && 
-                  protocol.due_date && 
-                  protocol.due_date.trim() !== '' && 
-                  protocol.due_date < todayStr) {
-                reviewerStats.overdue++;
-              }
-              
-              reviewersMap.set(reviewer.id, reviewerStats);
-            });
-          } 
-          // Handle protocols with single reviewer field
-          else if (protocol.reviewer) {
-            const reviewerStats = reviewersMap.get(protocol.reviewer) || {
-              name: protocol.reviewer,
-              assigned: 0,
-              completed: 0,
-              overdue: 0
-            };
-            
-            reviewerStats.assigned++;
-            
-            if (protocol.status === 'Completed') {
-              reviewerStats.completed++;
-            }
-            
-            if (protocol.status !== 'Completed' && 
-                protocol.due_date && 
-                protocol.due_date.trim() !== '' && 
-                protocol.due_date < todayStr) {
-              reviewerStats.overdue++;
-            }
-            
-            reviewersMap.set(protocol.reviewer, reviewerStats);
-          }
-        });
-        
-        // Convert Map to Array and sort by assigned count (desc)
-        const sortedReviewers = Array.from(reviewersMap.entries())
-          .map(([reviewerId, stats]) => ({
-            reviewerId,
-            ...stats
-          }))
-          .sort((a, b) => b.assigned - a.assigned)
-          .slice(0, 5); // Get top 5 for display
-        
-        // Prepare chart data for completion status by release period
-        const releaseStats = new Map<string, { completed: number, inProgress: number }>();
-        
-        groupedProtocols.forEach(protocol => {
-          if (!protocol.release_period) return;
-          
-          const stats = releaseStats.get(protocol.release_period) || { completed: 0, inProgress: 0 };
-          
-          if (protocol.status === 'Completed') {
-            stats.completed++;
-          } else {
-            stats.inProgress++;
-          }
-          
-          releaseStats.set(protocol.release_period, stats);
-        });
-        
-        // Convert to chart format - sort by release period
-        const sortedReleases = Array.from(releaseStats.keys()).sort((a, b) => {
-          // Sort first/second/third/fourth releases first
-          const orderMap: {[key: string]: number} = {
-            'First Release': 1, 'Second Release': 2, 'Third Release': 3, 'Fourth Release': 4
-          };
-          
-          const aOrder = orderMap[a] || 99;
-          const bOrder = orderMap[b] || 99;
-          
-          if (aOrder !== bOrder) return aOrder - bOrder;
-          
-          // Then sort by month for monthly releases
-          return a.localeCompare(b);
-        });
-        
-        const completedData = sortedReleases.map(release => releaseStats.get(release)?.completed || 0);
-        const inProgressData = sortedReleases.map(release => releaseStats.get(release)?.inProgress || 0);
-        
-        setChartData({
-          labels: sortedReleases,
-          datasets: [
-            {
-              label: 'Completed',
-              data: completedData,
-              backgroundColor: 'rgba(34, 197, 94, 0.7)'
-            },
-            {
-              label: 'In Progress',
-              data: inProgressData,
-              backgroundColor: 'rgba(59, 130, 246, 0.7)'
-            }
-          ]
-        });
-        
-        // Extract overdue reviewers from all protocols
-        const extractedOverdueReviewers: {
-          protocolId: string;
-          spupRecCode: string;
-          reviewerId: string;
-          reviewerName: string;
-          dueDate: string;
-          protocolPath?: string;
-        }[] = [];
-        // Extract due soon reviewers from all protocols
-        const extractedDueSoonReviewers: {
-          protocolId: string;
-          spupRecCode: string;
-          reviewerId: string;
-          reviewerName: string;
-          dueDate: string;
-          protocolPath?: string;
-        }[] = [];
-        // Collect data for calculating fastest reviewers
-        const reviewerCompletionTimes: Record<string, {
-          reviewerId: string,
-          name: string,
-          completionTimes: number[],  // Time in days
-          completedCount: number
-        }> = {};
-        protocols.forEach(protocol => {
-          if (protocol.reviewers && protocol.reviewers.length > 0) {
-            protocol.reviewers.forEach(reviewer => {
-              // Process overdue reviewers
-              const reviewerDueDate = ensureValidDueDate(reviewer.due_date || '');
-              if (reviewer.status !== 'Completed' && reviewerDueDate && isOverdue(reviewerDueDate)) {
-                extractedOverdueReviewers.push({
-                  protocolId: protocol.id,
-                  spupRecCode: protocol.spup_rec_code || protocol.id,
-                  reviewerId: reviewer.id,
-                  reviewerName: reviewer.name,
-                  dueDate: reviewerDueDate,
-                  protocolPath: protocol._path
-                });
-              }
-              // Process due soon reviewers
-              if (reviewer.status !== 'Completed' && reviewerDueDate && !isOverdue(reviewerDueDate) && isDueSoon(reviewerDueDate)) {
-                extractedDueSoonReviewers.push({
-                  protocolId: protocol.id,
-                  spupRecCode: protocol.spup_rec_code || protocol.id,
-                  reviewerId: reviewer.id,
-                  reviewerName: reviewer.name,
-                  dueDate: reviewerDueDate,
-                  protocolPath: protocol._path
-                });
-              }
-              // Process completed reviews for speed calculation
-              if (reviewer.status === 'Completed' && reviewer.completed_at && reviewer.due_date) {
-                const dueDate = new Date(ensureValidDueDate(reviewer.due_date));
-                const completedDate = new Date(reviewer.completed_at);
-                if (isNaN(dueDate.getTime()) || isNaN(completedDate.getTime())) {
-                  return;
-                }
-                const daysDifference = (completedDate.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24);
-                if (!reviewerCompletionTimes[reviewer.id]) {
-                  reviewerCompletionTimes[reviewer.id] = {
-                    reviewerId: reviewer.id,
-                    name: reviewer.name,
-                    completionTimes: [],
-                    completedCount: 0
-                  };
-                }
-                reviewerCompletionTimes[reviewer.id].completionTimes.push(daysDifference);
-                reviewerCompletionTimes[reviewer.id].completedCount++;
-              }
-            });
-          }
-        });
-        // Sort by due date (oldest first)
-        extractedOverdueReviewers.sort((a, b) => a.dueDate.localeCompare(b.dueDate));
-        setOverdueReviewers(extractedOverdueReviewers);
-        // Sort due soon reviewers by due date (soonest first)
-        extractedDueSoonReviewers.sort((a, b) => a.dueDate.localeCompare(b.dueDate));
-        setDueSoonReviewers(extractedDueSoonReviewers);
-        // Debug log
-        console.log('Extracted Due Soon Reviewers:', extractedDueSoonReviewers);
-        
-        // Calculate average completion times and find fastest reviewers
-        const fastestReviewersArray = Object.values(reviewerCompletionTimes)
-          .filter(reviewer => reviewer.completedCount > 0) // Only include reviewers with at least 1 completed review
-          .map(reviewer => ({
-            reviewerId: reviewer.reviewerId,
-            name: reviewer.name,
-            averageCompletionDays: reviewer.completionTimes.reduce((sum, time) => sum + time, 0) / reviewer.completionTimes.length,
-            completedCount: reviewer.completedCount
-          }))
-          .sort((a, b) => a.name.localeCompare(b.name)); // Sort alphabetically by name
-        setFastestReviewers(fastestReviewersArray);
-        
-        // Calculate protocol counts for status cards
-        const overdueProtocolCount = new Set(extractedOverdueReviewers.map(r => r.protocolId)).size;
-        const dueSoonProtocolCount = new Set(extractedDueSoonReviewers.map(r => r.protocolId)).size;
-        // Set all the state
-        setOverdueProtocols(sortedOverdue.slice(0, 5));
-        setUpcomingDueProtocols(sortedUpcoming.slice(0, 5));
-        setRecentProtocols(sortedRecent);
-        setReviewerStats(sortedReviewers);
-        setStats({
-          totalProtocols: uniqueProtocolCount,
-          totalReviews: protocols.length,
-          overdueCount: overdueProtocolCount,
-          completedCount: completed,
-          inProgressCount: inProgress + partiallyCompleted,
-          dueSoonCount: dueSoonProtocolCount
-        });
-      } catch (err) {
-        console.error("Error fetching dashboard data:", err);
-        setError("Failed to load dashboard data");
+
+        const reviewersSnapshot = await getDocs(collection(db, 'reviewers'));
+
+        setProtocols(fetchedProtocols);
+        setReviewerCount(reviewersSnapshot.size);
+      } catch (dashboardError) {
+        console.error('Error loading admin dashboard:', dashboardError);
+        setError('Failed to load dashboard data. Please refresh and try again.');
       } finally {
         setLoading(false);
       }
     };
-    
+
     fetchDashboardData();
   }, []);
 
-  useEffect(() => {
-    const fetchReassignmentStats = async () => {
-      try {
-        const protocolsRef = collection(db, 'protocols');
-        const protocolsSnapshot = await getDocs(protocolsRef);
-        const stats: { [key: string]: number } = {};
+  const assignments = useMemo(() => getReviewAssignments(protocols), [protocols]);
+  const monthGroups = useMemo(() => groupProtocolsByMonth(protocols), [protocols]);
 
-        for (const protocolDoc of protocolsSnapshot.docs) {
-          const auditRef = collection(protocolDoc.ref, 'audit');
-          const auditSnapshot = await getDocs(auditRef);
-          auditSnapshot.forEach((doc) => {
-            const data = doc.data();
-            const reviewer = data.reviewer;
-            if (reviewer) {
-              stats[reviewer] = (stats[reviewer] || 0) + 1;
-            }
+  const activeAssignments = useMemo(
+    () => assignments.filter((assignment) => assignment.status !== 'Completed'),
+    [assignments]
+  );
+  const completedAssignments = assignments.length - activeAssignments.length;
+  const overdueAssignments = useMemo(
+    () => activeAssignments.filter((assignment) => assignment.dueDate && isOverdue(assignment.dueDate)).sort(sortByDueDate),
+    [activeAssignments]
+  );
+  const dueSoonAssignments = useMemo(
+    () => activeAssignments
+      .filter((assignment) => assignment.dueDate && isDueSoon(assignment.dueDate))
+      .sort(sortByDueDate),
+    [activeAssignments]
+  );
+  const completionPercent = getCompletionPercent(completedAssignments, assignments.length);
+
+  const recentProtocols = useMemo(() => (
+    [...protocols]
+      .sort((left, right) => {
+        const leftDate = new Date(left.created_at || 0).getTime();
+        const rightDate = new Date(right.created_at || 0).getTime();
+
+        return rightDate - leftDate;
+      })
+      .slice(0, 6)
+  ), [protocols]);
+
+  const monthActivity = useMemo<MonthActivity[]>(() => (
+    monthGroups.slice(0, 5).map((month) => {
+      const monthAssignments = assignments.filter((assignment) => assignment.monthId === month.monthId);
+      const active = monthAssignments.filter((assignment) => assignment.status !== 'Completed');
+
+      return {
+        month,
+        reviewTotal: monthAssignments.length,
+        reviewCompleted: monthAssignments.length - active.length,
+        active: active.length,
+        overdue: active.filter((assignment) => assignment.dueDate && isOverdue(assignment.dueDate)).length,
+      };
+    })
+  ), [assignments, monthGroups]);
+
+  const reviewerSpeed = useMemo<ReviewerSpeed[]>(() => {
+    const reviewerMap = new Map<string, {
+      reviewerId: string;
+      reviewerName: string;
+      assignedCount: number;
+      completedCount: number;
+      pendingCount: number;
+      overdueCount: number;
+      scoredDays: number[];
+      completedDays: number[];
+      openDays: number[];
+    }>();
+    const today = new Date();
+
+    const trackReviewer = ({
+      reviewerId,
+      reviewerName,
+      status,
+      dueDate,
+      createdDate,
+      completedDate,
+    }: {
+      reviewerId: string;
+      reviewerName: string;
+      status: string;
+      dueDate: string;
+      createdDate: Date;
+      completedDate: Date | null;
+    }) => {
+      const current = reviewerMap.get(reviewerId) ?? {
+        reviewerId,
+        reviewerName,
+        assignedCount: 0,
+        completedCount: 0,
+        pendingCount: 0,
+        overdueCount: 0,
+        scoredDays: [],
+        completedDays: [],
+        openDays: [],
+      };
+
+      current.assignedCount += 1;
+
+      if (status === 'Completed') {
+        current.completedCount += 1;
+
+        if (completedDate) {
+          const completedDays = getDayDifference(createdDate, completedDate);
+          current.completedDays.push(completedDays);
+          current.scoredDays.push(completedDays);
+        }
+      } else {
+        const openDays = getDayDifference(createdDate, today);
+        current.pendingCount += 1;
+        current.openDays.push(openDays);
+        current.scoredDays.push(openDays);
+
+        if (dueDate && isOverdue(dueDate)) {
+          current.overdueCount += 1;
+        }
+      }
+
+      reviewerMap.set(reviewerId, current);
+    };
+
+    for (const protocol of protocols) {
+      const createdDate = getDateValue(protocol.created_at);
+
+      if (!createdDate) {
+        continue;
+      }
+
+      if (protocol.reviewers && protocol.reviewers.length > 0) {
+        for (const reviewer of protocol.reviewers) {
+          const reviewerId = reviewer.id || reviewer.name || 'reviewer';
+
+          trackReviewer({
+            reviewerId,
+            reviewerName: reviewer.name || reviewer.id || 'Reviewer',
+            status: reviewer.status || 'In Progress',
+            dueDate: reviewer.due_date || protocol.due_date,
+            createdDate,
+            completedDate: getDateValue(reviewer.completed_at),
           });
         }
 
-        const sortedStats = Object.entries(stats)
-          .map(([reviewer, count]) => ({ reviewer, count }))
-          .sort((a, b) => b.count - a.count);
-
-        setReassignmentStats(sortedStats);
-      } catch (err) {
-        console.error('Error fetching reassignment stats:', err);
-        setError('Failed to load reassignment statistics');
+        continue;
       }
-    };
 
-    fetchReassignmentStats();
-  }, []);
-
-  const getStatusBadge = (status: string, dueDate: string) => {
-    if (status === 'Completed') {
-      return <span className="bg-green-100 text-green-800 text-xs px-2 py-1 rounded-full">Completed</span>;
-    } else if (dueDate && dueDate.trim() !== '' && isOverdue(dueDate)) {
-      return <span className="bg-red-100 text-red-800 text-xs px-2 py-1 rounded-full">Overdue</span>;
-    } else if (dueDate && dueDate.trim() !== '' && isDueSoon(dueDate)) {
-      return <span className="bg-yellow-100 text-yellow-800 text-xs px-2 py-1 rounded-full">Due Soon</span>;
-    } else if (status === 'Partially Completed') {
-      return <span className="bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded-full">Partially Completed</span>;
-    } else {
-      return <span className="bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded-full">In Progress</span>;
+      if (protocol.reviewer) {
+        trackReviewer({
+          reviewerId: protocol.reviewer,
+          reviewerName: protocol.reviewer,
+          status: protocol.status || 'In Progress',
+          dueDate: protocol.due_date,
+          createdDate,
+          completedDate: null,
+        });
+      }
     }
-  };
 
-  // Reviewer Completion Speed Analytics Data
-  const reviewerSpeedData = fastestReviewers.length > 0 ? (() => {
-    // Sort reviewers from fastest (lowest avg days) to slowest (highest avg days)
-    const sorted = [...fastestReviewers].sort((a, b) => a.averageCompletionDays - b.averageCompletionDays);
-    const slowestIndex = sorted.length > 0 ? sorted.length - 1 : 0;
-    return {
-      labels: sorted.map(r => r.name),
-      datasets: [
-        {
-          label: 'Average Completion Days',
-          // Reverse the sign so bars go left to right
-          data: sorted.map(r => Number((-r.averageCompletionDays).toFixed(2))),
-          backgroundColor: sorted.map((_, idx) => idx === slowestIndex ? 'rgba(239, 68, 68, 0.7)' : 'rgba(59, 130, 246, 0.7)'),
-        }
-      ]
-    };
-  })() : null;
+    return Array.from(reviewerMap.values())
+      .filter((reviewer) => reviewer.assignedCount > 0)
+      .map((reviewer) => {
+        const scoreDays = reviewer.scoredDays.length > 0
+          ? reviewer.scoredDays.reduce((sum, days) => sum + days, 0) / reviewer.scoredDays.length
+          : null;
+        const completedAverageDays = reviewer.completedDays.length > 0
+          ? reviewer.completedDays.reduce((sum, days) => sum + days, 0) / reviewer.completedDays.length
+          : null;
+
+        return {
+          reviewerId: reviewer.reviewerId,
+          reviewerName: reviewer.reviewerName,
+          assignedCount: reviewer.assignedCount,
+          completedCount: reviewer.completedCount,
+          pendingCount: reviewer.pendingCount,
+          overdueCount: reviewer.overdueCount,
+          scoreDays,
+          completedAverageDays,
+          longestOpenDays: reviewer.openDays.length > 0 ? Math.max(...reviewer.openDays) : null,
+          completionRate: getCompletionPercent(reviewer.completedCount, reviewer.assignedCount),
+        };
+      })
+      .sort((left, right) => {
+        const leftHasCompletedData = left.completedAverageDays === null ? 1 : 0;
+        const rightHasCompletedData = right.completedAverageDays === null ? 1 : 0;
+
+        const leftHasScore = left.scoreDays === null ? 1 : 0;
+        const rightHasScore = right.scoreDays === null ? 1 : 0;
+
+        return leftHasCompletedData - rightHasCompletedData
+          || leftHasScore - rightHasScore
+          || (left.scoreDays ?? Number.MAX_SAFE_INTEGER) - (right.scoreDays ?? Number.MAX_SAFE_INTEGER)
+          || left.overdueCount - right.overdueCount
+          || left.pendingCount - right.pendingCount
+          || right.completedCount - left.completedCount;
+      });
+  }, [protocols]);
+
+  const currentDateLabel = useMemo(() => (
+    new Date().toLocaleDateString('en-US', {
+      weekday: 'long',
+      month: 'long',
+      day: 'numeric',
+      year: 'numeric',
+    })
+  ), []);
 
   if (loading) {
     return (
-      <div className="flex justify-center items-center h-64">
-        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
+      <div className="min-h-[calc(100vh-4rem)] bg-slate-50 p-6">
+        <div className="mx-auto flex max-w-7xl items-center justify-center rounded-lg border border-slate-200 bg-white p-12 shadow-sm">
+          <div className="h-10 w-10 animate-spin rounded-full border-4 border-emerald-600 border-t-transparent" />
+          <span className="ml-3 text-sm font-medium text-slate-600">Loading dashboard...</span>
+        </div>
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-md">
-        <p className="font-bold">Error!</p>
-        <p>{error}</p>
+      <div className="min-h-[calc(100vh-4rem)] bg-slate-50 p-6">
+        <div className="mx-auto max-w-7xl rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-red-800">
+          <p className="font-semibold">Dashboard unavailable</p>
+          <p className="mt-1 text-sm">{error}</p>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="p-6 max-w-7xl mx-auto">
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold mb-2">Admin Dashboard</h1>
-        <p className="text-gray-600">Welcome to the e-REC Administration Dashboard. Here you can monitor the status of all protocols and reviewer assignments.</p>
-      </div>
-      
-      {/* Stats Overview */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        <ProtocolStatusCard 
-          title="Total Protocols" 
-          count={stats.totalProtocols} 
-          icon={
-            <svg className="w-8 h-8 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
-            </svg>
-          }
-          color="blue"
-        />
-        <ProtocolStatusCard 
-          title="Completed" 
-          count={stats.completedCount} 
-          icon={
-            <svg className="w-8 h-8 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path>
-            </svg>
-          }
-          color="green"
-        />
-        <ProtocolStatusCard 
-          title="Overdue" 
-          count={stats.overdueCount} 
-          icon={
-            <svg className="w-8 h-8 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-            </svg>
-          }
-          color="red"
-        />
-        <ProtocolStatusCard 
-          title="Due Soon" 
-          count={stats.dueSoonCount} 
-          icon={
-            <svg className="w-8 h-8 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-            </svg>
-          }
-          color="yellow"
-        />
-      </div>
-      
-      {/* Quick Actions */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-        <Link href="/admin/protocols" className="bg-white p-6 rounded-lg shadow hover:shadow-md transition duration-200">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-medium">Manage Protocols</h3>
-            <svg className="w-8 h-8 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
-            </svg>
+    <div className="min-h-[calc(100vh-4rem)] bg-slate-50">
+      <main className="mx-auto max-w-7xl space-y-6 p-4 sm:p-6">
+        <section className="rounded-lg border border-slate-200 bg-white px-5 py-5 shadow-sm">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <p className="text-sm font-medium text-emerald-700">{currentDateLabel}</p>
+              <h1 className="mt-1 text-2xl font-semibold tracking-normal text-slate-950">Admin Dashboard</h1>
+              <p className="mt-2 max-w-3xl text-sm text-slate-600">
+                Monitor review workload, overdue assignments, and recent protocol activity across all months and weeks.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Link href="/admin/csv-upload" className="inline-flex items-center gap-2 rounded-md bg-emerald-700 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-800">
+                <HiOutlineArrowUpTray className="h-4 w-4" />
+                Upload
+              </Link>
+              <Link href="/admin/protocols" className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                <HiOutlineFolderOpen className="h-4 w-4" />
+                Protocols
+              </Link>
+              <Link href="/admin/request-documents" className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                <HiOutlineDocumentText className="h-4 w-4" />
+                Requests
+              </Link>
+            </div>
           </div>
-          <p className="text-gray-600 text-sm">View and manage all protocols in the system. Track completion status and reviewer assignments.</p>
-        </Link>
-        
-        <Link href="/admin/due-dates" className="bg-white p-6 rounded-lg shadow hover:shadow-md transition duration-200">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-medium">Due Date Tracking</h3>
-            <svg className="w-8 h-8 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-            </svg>
-          </div>
-          <p className="text-gray-600 text-sm">Monitor due dates, manage overdue protocols, and reassign reviews when needed.</p>
-        </Link>
-        
-        <Link href="/admin/csv-upload" className="bg-white p-6 rounded-lg shadow hover:shadow-md transition duration-200">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-medium">Upload Protocols</h3>
-            <svg className="w-8 h-8 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
-            </svg>
-          </div>
-          <p className="text-gray-600 text-sm">Upload CSV files to generate new protocol entries. Convert data to JSON format for storage.</p>
-        </Link>
-      </div>
-      
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-        {/* Overdue Protocols */}
-        <div className="bg-white rounded-lg shadow-md">
-          <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
-            <h3 className="text-lg font-medium text-gray-900">Overdue Reviewers</h3>
-            <Link 
-              href="/admin/due-dates?filter=overdue" 
-              className="text-blue-600 hover:text-blue-800 text-sm"
-            >
-              View All
-            </Link>
-          </div>
-          <div className="p-4">
-            {overdueReviewers.length > 0 ? (
-              <ul className="divide-y divide-gray-200">
-                {overdueReviewers.slice(0, 5).map((item, index) => (
-                  <li key={index} className="py-3">
-                    <div className="flex justify-between">
-                      <div>
-                        <p className="text-sm font-medium text-gray-900">
-                          {item.spupRecCode}
-                        </p>
-                        <p className="text-xs text-gray-500">
-                          Reviewer: <span className="font-medium">{item.reviewerName}</span>
-                        </p>
-                        <p className="text-xs text-gray-500">
-                          Due: {formatDate(item.dueDate)}
-                        </p>
-                      </div>
-                      <div className="flex flex-col items-end">
-                        <span className="bg-red-100 text-red-800 text-xs px-2 py-1 rounded-full mb-2">Overdue</span>
-                        <Link 
-                          href={`/admin/protocols/${item.protocolId}/reviewer/${item.reviewerName}/reassign`}
-                          className="text-blue-600 hover:text-blue-800 text-xs"
-                        >
-                          Reassign
-                        </Link>
-                      </div>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="text-center py-4 text-gray-500">No overdue reviewers.</p>
-            )}
-          </div>
-        </div>
-        {/* Due Soon Reviewers */}
-        <div className="bg-white rounded-lg shadow-md">
-          <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
-            <h3 className="text-lg font-medium text-gray-900">Due Soon Reviewers</h3>
-            <Link 
-              href="/admin/due-dates?filter=due-soon" 
-              className="text-blue-600 hover:text-blue-800 text-sm"
-            >
-              View All
-            </Link>
-          </div>
-          <div className="p-4">
-            {dueSoonReviewers.length > 0 ? (
-              <ul className="divide-y divide-gray-200">
-                {dueSoonReviewers.slice(0, 5).map((item, index) => (
-                  <li key={index} className="py-3">
-                    <div className="flex justify-between">
-                      <div>
-                        <p className="text-sm font-medium text-gray-900">
-                          {item.spupRecCode}
-                        </p>
-                        <p className="text-xs text-gray-500">
-                          Reviewer: <span className="font-medium">{item.reviewerName}</span>
-                        </p>
-                        <p className="text-xs text-gray-500">
-                          Due: {formatDate(item.dueDate)}
-                        </p>
-                      </div>
-                      <div className="flex flex-col items-end">
-                        <span className="bg-yellow-100 text-yellow-800 text-xs px-2 py-1 rounded-full mb-2">Due Soon</span>
-                        <Link 
-                          href={`/admin/protocols/${item.protocolId}/reviewer/${item.reviewerName}/reassign`}
-                          className="text-blue-600 hover:text-blue-800 text-xs"
-                        >
-                          Reassign
-                        </Link>
-                      </div>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="text-center py-4 text-gray-500">No reviewers due soon.</p>
-            )}
-          </div>
-        </div>
-      </div>
-      
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mt-8">
-        {/* Recent Protocols */}
-        <div className="bg-white rounded-lg shadow-md">
-          <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
-            <h3 className="text-lg font-medium text-gray-900">Recently Added</h3>
-            <Link href="/admin/protocols" className="text-blue-600 hover:text-blue-800 text-sm">
-              View All
-            </Link>
-          </div>
-          <div className="p-4">
-            {recentProtocols.length > 0 ? (
-              <ul className="divide-y divide-gray-200">
-                {recentProtocols.map((protocol) => (
-                  <li key={protocol.id} className="py-3">
-                    <div className="flex justify-between">
-                      <div>
-                        <p className="text-sm font-medium text-gray-900">
-                          {protocol.spup_rec_code || protocol.id}
-                        </p>
-                        <p className="text-xs text-gray-500">
-                          {protocol.principal_investigator || 'No Principal Investigator'}
-                        </p>
-                        <p className="text-xs text-gray-500">
-                          Added: {(() => {
-                            try {
-                              if (typeof protocol.created_at === 'string') {
-                                return formatDate(protocol.created_at.split('T')[0]);
-                              } else if (protocol.created_at) {
-                                return formatDate(new Date(protocol.created_at).toISOString().split('T')[0]);
-                              }
-                              return 'Unknown date';
-                            } catch {
-                              return 'Unknown date';
-                            }
-                          })()} · {protocol.release_period}
-                        </p>
-                      </div>
-                      <div>
-                        {getStatusBadge(protocol.status, getLatestDueDate(protocol))}
-                      </div>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="text-center py-4 text-gray-500">No recent protocols.</p>
-            )}
-          </div>
-        </div>
-        
-        {/* Fastest Reviewers */}
-        <div className="bg-white rounded-lg shadow-md">
-          <div className="px-6 py-4 border-b border-gray-200">
-            <h3 className="text-lg font-medium text-gray-900">Completed Reviews for the Reviewers</h3>
-          </div>
-          <div className="p-4">
-            {fastestReviewers.length > 0 ? (
-              <ul className="divide-y divide-gray-200">
-                {fastestReviewers.map((reviewer, index) => (
-                  <li key={index} className="py-3">
-                    <div className="flex justify-between items-center">
-                      <div>
-                        <p className="text-sm font-medium text-gray-900">{reviewer.name}</p>
-                        <p className="text-xs text-gray-500">
-                          {reviewer.completedCount} reviews completed
-                        </p>
-                      </div>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="text-center py-4 text-gray-500">No reviewer completion data available.</p>
-            )}
-          </div>
-        </div>
-      </div>
-      
-      {/* Add Completion Chart by Release Period */}
-      <div className="bg-white rounded-lg shadow p-6 my-8">
-        <h2 className="text-xl font-bold mb-4">Protocol Completion by Release Period</h2>
-        
-        {loading ? (
-          <div className="flex justify-center items-center h-64">
-            <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
-          </div>
-        ) : error ? (
-          <div className="text-red-500 text-center">{error}</div>
-        ) : chartData.labels.length === 0 ? (
-          <div className="text-gray-500 text-center py-8">No data available for chart</div>
-        ) : (
-          <div className="h-80">
-            <ChartRegistry />
-            <Chart
-              data={chartData}
-              options={{
-                responsive: true,
-                maintainAspectRatio: false,
-                scales: {
-                  x: {
-                    stacked: true,
-                    title: {
-                      display: true,
-                      text: 'Release Period'
-                    }
-                  },
-                  y: {
-                    stacked: true,
-                    title: {
-                      display: true,
-                      text: 'Number of Protocols'
-                    },
-                    ticks: {
-                      precision: 0
-                    }
-                  }
-                },
-                plugins: {
-                  legend: {
-                    position: 'top'
-                  },
-                  tooltip: {
-                    callbacks: {
-                      title: (tooltipItems) => {
-                        return tooltipItems[0].label;
-                      }
-                    }
-                  }
-                }
-              }}
-            />
-          </div>
-        )}
-      </div>
+        </section>
 
-      {/* Reviewer Completion Speed Analytics */}
-      {reviewerSpeedData && (
-        <div className="bg-white rounded-lg shadow p-6 my-8">
-          <h2 className="text-xl font-bold mb-4">Reviewer Completion Speed Analytics</h2>
-          <div className="h-96">
-            <Chart
-              data={reviewerSpeedData}
-              options={{
-                indexAxis: 'y',
-                responsive: true,
-                maintainAspectRatio: false,
-                scales: {
-                  x: {
-                    title: {
-                      display: true,
-                      text: 'Average Completion Days (higher = earlier completion)'
-                    }
-                  },
-                  y: {
-                    title: {
-                      display: true,
-                      text: 'Reviewer'
-                    }
-                  }
-                },
-                plugins: {
-                  legend: { display: false } as const,
-                  tooltip: {
-                    callbacks: {
-                      label: (ctx: any) => {
-                        // Show the original value (with sign)
-                        const idx = ctx.dataIndex;
-                        const orig = fastestReviewers.length > 0 ? [...fastestReviewers].sort((a, b) => a.averageCompletionDays - b.averageCompletionDays)[idx].averageCompletionDays : 0;
-                        return `${orig > 0 ? '+' : ''}${orig.toFixed(2)} days`;
-                      }
-                    }
-                  }
-                }
-              }}
-            />
-          </div>
-        </div>
-      )}
+        <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <StatTile
+            label="Protocols"
+            value={protocols.length}
+            hint={`${monthGroups.length} active month${monthGroups.length === 1 ? '' : 's'}`}
+            tone="neutral"
+            icon={<HiOutlineClipboardDocumentList className="h-5 w-5" />}
+          />
+          <StatTile
+            label="Review Completion"
+            value={`${completionPercent}%`}
+            hint={`${completedAssignments}/${assignments.length} reviews completed`}
+            tone="success"
+            icon={<HiOutlineCheckCircle className="h-5 w-5" />}
+          />
+          <StatTile
+            label="Overdue Reviews"
+            value={overdueAssignments.length}
+            hint="Reviewer assignments past due"
+            tone={overdueAssignments.length > 0 ? 'danger' : 'success'}
+            icon={<HiOutlineExclamationTriangle className="h-5 w-5" />}
+          />
+          <StatTile
+            label="Due Soon"
+            value={dueSoonAssignments.length}
+            hint="Assignments due within 7 days"
+            tone={dueSoonAssignments.length > 0 ? 'warning' : 'neutral'}
+            icon={<HiOutlineClock className="h-5 w-5" />}
+          />
+        </section>
 
-      <div className="mt-8">
-        <h2 className="text-xl font-semibold mb-4">Reassignment Analytics</h2>
-        {loading ? (
-          <p>Loading reassignment statistics...</p>
-        ) : error ? (
-          <p className="text-red-600">{error}</p>
-        ) : (
-          <table className="min-w-full bg-white border border-gray-200">
-            <thead>
-              <tr>
-                <th className="py-2 px-4 border-b">Reviewer</th>
-                <th className="py-2 px-4 border-b">Times Reassigned</th>
-              </tr>
-            </thead>
-            <tbody>
-              {reassignmentStats.map((stat, index) => (
-                <tr key={index}>
-                  <td className="py-2 px-4 border-b">{stat.reviewer}</td>
-                  <td className="py-2 px-4 border-b">{stat.count}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+        <section className="grid grid-cols-1 gap-4 lg:grid-cols-[1.35fr_0.65fr]">
+          <div className="rounded-lg border border-slate-200 bg-white shadow-sm">
+            <SectionHeader title="Review Workload" detail="Current completion, active assignments, and reviewer coverage." />
+            <div className="p-4">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                <div>
+                  <p className="text-sm font-medium text-slate-500">Completed Reviews</p>
+                  <p className="mt-2 text-2xl font-semibold text-slate-950">{completedAssignments}</p>
+                  <div className="mt-3 h-2 rounded-full bg-slate-100">
+                    <div className="h-2 rounded-full bg-emerald-600" style={{ width: `${completionPercent}%` }} />
+                  </div>
+                  <p className="mt-2 text-xs text-slate-500">{completionPercent}% completion rate</p>
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-slate-500">Active Reviews</p>
+                  <p className="mt-2 text-2xl font-semibold text-slate-950">{activeAssignments.length}</p>
+                  <p className="mt-3 text-sm text-slate-500">Reviews still assigned to reviewers.</p>
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-slate-500">Reviewers</p>
+                  <p className="mt-2 text-2xl font-semibold text-slate-950">{reviewerCount}</p>
+                  <p className="mt-3 text-sm text-slate-500">People available in reviewer management.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-slate-200 bg-white shadow-sm">
+            <SectionHeader title="Quick Actions" />
+            <div className="divide-y divide-slate-100">
+              {[
+                { label: 'Upload protocols', href: '/admin/csv-upload', icon: HiOutlineArrowUpTray },
+                { label: 'Send reviewer emails', href: '/admin/protocols', icon: HiOutlineBellAlert },
+                { label: 'View mailing status', href: '/admin/mailing', icon: HiOutlineClock },
+                { label: 'Manage reviewers', href: '/admin/reviewers', icon: HiOutlineUsers },
+                { label: 'Prepare request documents', href: '/admin/request-documents', icon: HiOutlineDocumentText },
+              ].map((action) => {
+                const Icon = action.icon;
+
+                return (
+                  <Link key={action.href} href={action.href} className="flex items-center justify-between px-4 py-3 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                    <span className="flex items-center gap-2">
+                      <Icon className="h-4 w-4 text-emerald-700" />
+                      {action.label}
+                    </span>
+                    <HiOutlineArrowRight className="h-4 w-4 text-slate-400" />
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
+        </section>
+
+        <section className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          <div className="rounded-lg border border-slate-200 bg-white shadow-sm">
+            <SectionHeader title="Immediate Attention" detail="Oldest overdue reviewer assignments." href="/admin/protocols" action="Open protocols" />
+            {overdueAssignments.length === 0 ? (
+              <EmptyState message="No overdue reviewer assignments." />
+            ) : (
+              <div className="divide-y divide-slate-100">
+                {overdueAssignments.slice(0, 6).map((assignment) => (
+                  <div key={assignment.id} className="px-4 py-3">
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold text-slate-950">{assignment.spupRecCode}</p>
+                        <p className="mt-1 truncate text-sm text-slate-600">{assignment.reviewerName}</p>
+                        <p className="mt-1 text-xs text-slate-500">{assignment.monthLabel} - {assignment.weekLabel} - Due {safeFormatDate(assignment.dueDate)}</p>
+                      </div>
+                      <Link href={getWeekHref(assignment.monthId, assignment.weekId)} className="shrink-0 rounded-md border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-100">
+                        Open
+                      </Link>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="rounded-lg border border-slate-200 bg-white shadow-sm">
+            <SectionHeader
+              title="Review Status by Month"
+              detail="Stacked view of completed, active, and overdue reviews."
+              href="/admin/protocols"
+              action="Open months"
+            />
+            <MonthStatusChart activity={monthActivity} />
+          </div>
+        </section>
+
+        <section className="grid grid-cols-1 gap-4 xl:grid-cols-[1.25fr_0.75fr]">
+          <div className="rounded-lg border border-slate-200 bg-white shadow-sm">
+            <SectionHeader title="Month Activity" detail="Recent upload months with review progress." href="/admin/protocols" action="View hierarchy" />
+            {monthActivity.length === 0 ? (
+              <EmptyState message="No protocol months found." />
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-slate-200 text-sm">
+                  <thead className="bg-slate-50">
+                    <tr>
+                      <th className="px-4 py-3 text-left font-medium text-slate-500">Month</th>
+                      <th className="px-4 py-3 text-left font-medium text-slate-500">Protocols</th>
+                      <th className="px-4 py-3 text-left font-medium text-slate-500">Review Progress</th>
+                      <th className="px-4 py-3 text-left font-medium text-slate-500">Overdue</th>
+                      <th className="px-4 py-3 text-right font-medium text-slate-500">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {monthActivity.map((activity) => {
+                      const percent = getCompletionPercent(activity.reviewCompleted, activity.reviewTotal);
+
+                      return (
+                        <tr key={activity.month.monthId}>
+                          <td className="px-4 py-3 font-medium text-slate-950">{activity.month.monthLabel}</td>
+                          <td className="px-4 py-3 text-slate-600">{activity.month.protocols.length}</td>
+                          <td className="px-4 py-3">
+                            <div className="flex min-w-44 items-center gap-3">
+                              <div className="h-2 flex-1 rounded-full bg-slate-100">
+                                <div className="h-2 rounded-full bg-emerald-600" style={{ width: `${percent}%` }} />
+                              </div>
+                              <span className="w-10 text-xs text-slate-500">{percent}%</span>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 text-slate-600">{activity.overdue}</td>
+                          <td className="px-4 py-3 text-right">
+                            <Link href="/admin/protocols" className="text-sm font-medium text-emerald-700 hover:text-emerald-900">
+                              Open
+                            </Link>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          <div className="rounded-lg border border-slate-200 bg-white shadow-sm">
+            <SectionHeader title="Review Speed" detail="Decision view of reviewer speed, pending work, and overdue reviews." href="/admin/reviewers" action="Manage" />
+            <ReviewerSpeedChart reviewers={reviewerSpeed} />
+          </div>
+        </section>
+
+        <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
+          <SectionHeader title="Recent Protocols" detail="Latest protocol records added to the system." href="/admin/protocols" action="Browse all" />
+          {recentProtocols.length === 0 ? (
+            <EmptyState message="No recent protocols found." />
+          ) : (
+            <div className="divide-y divide-slate-100">
+              {recentProtocols.map((protocol) => {
+                const status = getProtocolState(protocol);
+                const reviewTotals = getProtocolReviewTotals(protocol);
+
+                return (
+                  <div key={`${protocol.monthId}/${protocol.weekId}/${protocol.id}`} className="grid grid-cols-1 gap-3 px-4 py-3 md:grid-cols-[1fr_auto_auto] md:items-center">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-slate-950">{protocol.spup_rec_code || protocol.id}</p>
+                      <p className="mt-1 truncate text-sm text-slate-600">{protocol.research_title || protocol.protocol_name || 'Untitled protocol'}</p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        {formatMonthLabel(protocol.monthId)} - {formatWeekLabel(protocol.weekId)} - Added {safeFormatDate((protocol.created_at || '').split('T')[0])}
+                      </p>
+                    </div>
+                    <span className={`w-fit rounded-full border px-2 py-1 text-xs font-medium ${getProtocolStatusStyle(status)}`}>
+                      {status}
+                    </span>
+                    <Link href={getWeekHref(protocol.monthId, protocol.weekId)} className="inline-flex w-fit items-center gap-1 text-sm font-medium text-emerald-700 hover:text-emerald-900">
+                      {reviewTotals.completed}/{reviewTotals.total} reviews
+                      <HiOutlineArrowRight className="h-4 w-4" />
+                    </Link>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </section>
+      </main>
     </div>
   );
 }

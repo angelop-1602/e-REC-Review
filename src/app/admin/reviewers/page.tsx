@@ -455,7 +455,7 @@ export default function ReviewersPage() {
       setIsMailModalOpen(false);
       setMailReviewer(null);
       showNotification(
-        `${mailReviewer.name} - ${periodLabel}: ${formatNotificationSummary(result as SendSummary)}.`,
+        `${mailReviewer.name} - ${periodLabel}: ${formatNotificationSummary(result as SendSummary)}. Track details on the Mailing page.`,
         hasProblems ? 'error' : 'success'
       );
     } catch (err) {
