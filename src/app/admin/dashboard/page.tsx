@@ -899,7 +899,7 @@ export default function AdminDashboard() {
           </div>
         </section>
 
-        <section className="grid grid-cols-1 gap-4 xl:grid-cols-[1.25fr_0.75fr]">
+        <section className="grid grid-cols-1 gap-4">
           <div className="rounded-lg border border-slate-200 bg-white shadow-sm">
             <SectionHeader title="Month Activity" detail="Recent upload months with review progress." href="/admin/protocols" action="View hierarchy" />
             {monthActivity.length === 0 ? (

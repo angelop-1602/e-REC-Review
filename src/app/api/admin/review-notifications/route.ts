@@ -10,7 +10,7 @@ import {
 } from 'firebase/firestore';
 import { getMailFrom, getMailTransporter } from '@/lib/mailer';
 import { getServerFirestore } from '@/lib/serverFirebase';
-import { formatMonthLabel, formatWeekLabel } from '@/lib/protocols';
+import { formatMonthLabel, formatWeekLabel, getMonthSortValue, getWeekSortValue } from '@/lib/protocols';
 import { getFormTypeName } from '@/lib/utils';
 
 export const runtime = 'nodejs';
@@ -24,6 +24,7 @@ interface ReviewerAssignment {
 }
 
 interface ProtocolPayload {
+  monthId?: string;
   weekId?: string;
   spup_rec_code: string;
   principal_investigator?: string;
@@ -37,6 +38,7 @@ interface NotificationPayload {
   monthDocumentId: string;
   weekId?: string;
   scope: 'week' | 'month';
+  periodLabel?: string;
   protocols: ProtocolPayload[];
 }
 
@@ -57,6 +59,8 @@ interface ReviewerEmailRecipient {
     formName: string;
     dueDate: string;
     documentLink: string;
+    monthId: string;
+    monthLabel: string;
     weekId: string;
     weekLabel: string;
   }>;
@@ -166,6 +170,7 @@ function validatePayload(payload: unknown): NotificationPayload {
     monthDocumentId: value.monthDocumentId.trim(),
     weekId: isNonEmptyString(value.weekId) ? value.weekId.trim() : undefined,
     scope,
+    periodLabel: isNonEmptyString(value.periodLabel) ? value.periodLabel.trim() : undefined,
     protocols: value.protocols,
   };
 }
@@ -245,7 +250,8 @@ async function getReviewerEmailMap(assignments: Array<{ id: string; name?: strin
 function buildRecipients(
   protocols: ProtocolPayload[],
   reviewerEmailMap: Map<string, ReviewerEmailInfo>,
-  fallbackWeekId?: string
+  fallbackWeekId?: string,
+  fallbackMonthId?: string
 ): ReviewerEmailRecipient[] {
   const recipients = new Map<string, ReviewerEmailRecipient>();
 
@@ -268,6 +274,7 @@ function buildRecipients(
         protocols: [],
       };
       const formType = reviewer.form_type?.trim() ?? '';
+      const monthId = isNonEmptyString(protocol.monthId) ? protocol.monthId.trim() : fallbackMonthId || '';
       const weekId = protocol.weekId || fallbackWeekId || 'week';
 
       recipient.protocols.push({
@@ -279,6 +286,8 @@ function buildRecipients(
         formName: getFormTypeName(formType),
         dueDate: reviewer.due_date || 'No due date set',
         documentLink: protocol.e_link || '',
+        monthId,
+        monthLabel: monthId ? formatMonthLabel(monthId) : '',
         weekId,
         weekLabel: formatWeekLabel(weekId),
       });
@@ -290,27 +299,76 @@ function buildRecipients(
   return Array.from(recipients.values());
 }
 
-function groupRecipientProtocolsByWeek(recipient: ReviewerEmailRecipient) {
-  const weekMap = new Map<string, ReviewerEmailRecipient['protocols']>();
+function groupRecipientProtocolsByPeriod(recipient: ReviewerEmailRecipient) {
+  const periodMap = new Map<string, {
+    monthId: string;
+    monthLabel: string;
+    weekId: string;
+    weekLabel: string;
+    protocols: ReviewerEmailRecipient['protocols'];
+  }>();
+  const uniqueMonthIds = new Set(
+    recipient.protocols
+      .map((protocol) => protocol.monthId)
+      .filter(Boolean)
+  );
+  const hasMultipleMonths = uniqueMonthIds.size > 1;
 
   for (const protocol of recipient.protocols) {
-    const weekProtocols = weekMap.get(protocol.weekId) ?? [];
-    weekProtocols.push(protocol);
-    weekMap.set(protocol.weekId, weekProtocols);
+    const periodKey = `${protocol.monthId || 'month'}/${protocol.weekId}`;
+    const period = periodMap.get(periodKey) ?? {
+      monthId: protocol.monthId,
+      monthLabel: protocol.monthLabel,
+      weekId: protocol.weekId,
+      weekLabel: protocol.weekLabel,
+      protocols: [],
+    };
+
+    period.protocols.push(protocol);
+    periodMap.set(periodKey, period);
   }
 
-  return Array.from(weekMap.entries())
-    .map(([weekId, protocols]) => ({
-      weekId,
-      weekLabel: protocols[0]?.weekLabel ?? formatWeekLabel(weekId),
-      protocols,
-    }))
+  return Array.from(periodMap.values())
     .sort((left, right) => {
-      const leftNumber = Number(left.weekId.match(/\d+/)?.[0] ?? Number.MAX_SAFE_INTEGER);
-      const rightNumber = Number(right.weekId.match(/\d+/)?.[0] ?? Number.MAX_SAFE_INTEGER);
+      const monthDifference = getMonthSortValue(left.monthId) - getMonthSortValue(right.monthId);
 
-      return leftNumber - rightNumber;
-    });
+      if (monthDifference !== 0) {
+        return monthDifference;
+      }
+
+      return getWeekSortValue(left.weekId) - getWeekSortValue(right.weekId);
+    })
+    .map((period) => ({
+      ...period,
+      sectionLabel: hasMultipleMonths && period.monthLabel
+        ? `${period.monthLabel} ${period.weekLabel}`
+        : period.weekLabel,
+    }));
+}
+
+function getNotificationPeriodLabel(payload: NotificationPayload): string {
+  if (isNonEmptyString(payload.periodLabel)) {
+    return payload.periodLabel.trim();
+  }
+
+  const protocolMonthIds = Array.from(new Set(
+    payload.protocols
+      .map((protocol) => isNonEmptyString(protocol.monthId) ? protocol.monthId.trim() : '')
+      .filter(Boolean)
+  )).sort((left, right) => getMonthSortValue(left) - getMonthSortValue(right));
+
+  if (payload.scope === 'month' && protocolMonthIds.length > 1) {
+    const firstLabel = formatMonthLabel(protocolMonthIds[0]);
+    const lastLabel = formatMonthLabel(protocolMonthIds[protocolMonthIds.length - 1]);
+
+    return firstLabel === lastLabel ? firstLabel : `${firstLabel} to ${lastLabel}`;
+  }
+
+  const monthLabel = formatMonthLabel(payload.monthDocumentId);
+
+  return payload.scope === 'month'
+    ? monthLabel
+    : `${monthLabel} ${formatWeekLabel(payload.weekId || '')}`;
 }
 
 function buildEmailHtml(
@@ -318,8 +376,8 @@ function buildEmailHtml(
   systemUrl: string,
   periodLabel: string
 ): string {
-  const weekSections = groupRecipientProtocolsByWeek(recipient).map((weekGroup) => {
-    const rows = weekGroup.protocols.map((protocol) => `
+  const periodSections = groupRecipientProtocolsByPeriod(recipient).map((periodGroup) => {
+    const rows = periodGroup.protocols.map((protocol) => `
       <tr>
         <td style="border:1px solid #d9e2d0;padding:8px;vertical-align:top;">${escapeHtml(protocol.spupRecCode)}</td>
         <td style="border:1px solid #d9e2d0;padding:8px;vertical-align:top;">${escapeHtml(protocol.researchTitle)}</td>
@@ -334,7 +392,7 @@ function buildEmailHtml(
     `).join('');
 
     return `
-      <h3 style="margin:24px 0 8px;font-size:16px;color:#31572c;">${escapeHtml(weekGroup.weekLabel)}</h3>
+      <h3 style="margin:24px 0 8px;font-size:16px;color:#31572c;">${escapeHtml(periodGroup.sectionLabel)}</h3>
       <table style="border-collapse:collapse;width:100%;font-size:13px;">
         <thead>
           <tr style="background:#f0f7ed;">
@@ -360,7 +418,7 @@ function buildEmailHtml(
         System link: <a href="${escapeHtml(systemUrl)}">${escapeHtml(systemUrl)}</a><br />
         Reviewer access code: <strong>${escapeHtml(recipient.id)}</strong>
       </p>
-      ${weekSections}
+      ${periodSections}
       <p>Please sign in to the e-REC Ethics Review System using the access code above.</p>
       <p>Thank you.</p>
     </div>
@@ -372,9 +430,9 @@ function buildEmailText(
   systemUrl: string,
   periodLabel: string
 ): string {
-  const protocolLines = groupRecipientProtocolsByWeek(recipient)
-    .map((weekGroup) => {
-      const lines = weekGroup.protocols
+  const protocolLines = groupRecipientProtocolsByPeriod(recipient)
+    .map((periodGroup) => {
+      const lines = periodGroup.protocols
         .map((protocol, index) => [
           `${index + 1}. ${protocol.spupRecCode} - ${protocol.researchTitle}`,
           `   Principal Investigator: ${protocol.principalInvestigator}`,
@@ -385,7 +443,7 @@ function buildEmailText(
         ].filter(Boolean).join('\n'))
         .join('\n\n');
 
-      return `${weekGroup.weekLabel}\n${lines}`;
+      return `${periodGroup.sectionLabel}\n${lines}`;
     })
     .join('\n\n');
 
@@ -604,12 +662,9 @@ export async function POST(request: NextRequest) {
     }
 
     const reviewerEmailMap = await getReviewerEmailMap(reviewerAssignments);
-    const recipients = buildRecipients(payload.protocols, reviewerEmailMap, payload.weekId);
+    const recipients = buildRecipients(payload.protocols, reviewerEmailMap, payload.weekId, payload.monthDocumentId);
     const systemUrl = getSystemUrl(request);
-    const monthLabel = formatMonthLabel(payload.monthDocumentId);
-    const periodLabel = payload.scope === 'month'
-      ? monthLabel
-      : `${monthLabel} ${formatWeekLabel(payload.weekId || '')}`;
+    const periodLabel = getNotificationPeriodLabel(payload);
     const maxAttempts = getMaxSendAttempts();
     const sendDelayMs = getSendDelayMs();
     const sent = [];

@@ -1,4 +1,5 @@
 import { isDueSoon, isOverdue } from '@/lib/utils';
+import type { Timestamp } from 'firebase/firestore';
 
 export const WEEK_IDS = ['week-1', 'week-2', 'week-3', 'week-4', 'week-5'] as const;
 
@@ -9,7 +10,7 @@ export interface Reviewer {
   document_type?: string;
   form_type?: string;
   due_date?: string;
-  completed_at?: any;
+  completed_at?: Timestamp | null;
 }
 
 export interface Protocol {
@@ -48,6 +49,11 @@ export interface MonthGroup {
   protocols: Protocol[];
   weeks: WeekGroup[];
 }
+
+type ProtocolSourceData = Record<string, unknown> & Partial<Omit<Protocol, 'id' | 'monthId' | 'weekId' | '_path' | 'due_date'>> & {
+  due_date?: unknown;
+  reviewers?: Reviewer[];
+};
 
 const MONTH_NAMES = [
   'January',
@@ -149,7 +155,7 @@ export function getMonthSortValue(monthId: string): number {
 
 export function normalizeProtocolData(
   id: string,
-  data: Record<string, any>,
+  data: ProtocolSourceData,
   monthId: string,
   weekId: string
 ): Protocol {
@@ -244,6 +250,7 @@ export function getProtocolStatusCounts(protocols: Protocol[]) {
 
 export function buildNotificationProtocols(protocols: Protocol[]) {
   return protocols.map((protocol) => ({
+    monthId: protocol.monthId,
     weekId: protocol.weekId,
     spup_rec_code: protocol.spup_rec_code || protocol.id,
     principal_investigator: protocol.principal_investigator || '',

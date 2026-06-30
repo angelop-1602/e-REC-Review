@@ -6,9 +6,11 @@ import { db } from '@/lib/firebaseconfig';
 import {
   WEEK_IDS,
   buildNotificationProtocols,
+  getMonthSortValue,
   getProtocolPathParts,
   groupProtocolsByMonth,
   normalizeProtocolData,
+  type MonthGroup,
   type Protocol,
 } from '@/lib/protocols';
 
@@ -74,6 +76,55 @@ function getProtocolsForReviewer(protocols: Protocol[], reviewer: Reviewer): Pro
   );
 }
 
+function getCurrentMonthSortValue(): number {
+  const now = new Date();
+
+  return now.getFullYear() * 100 + now.getMonth() + 1;
+}
+
+function getDefaultMailMonthId(monthGroups: MonthGroup[]): string {
+  const currentMonthValue = getCurrentMonthSortValue();
+
+  return monthGroups.find((month) => getMonthSortValue(month.monthId) === currentMonthValue)?.monthId
+    || monthGroups[0]?.monthId
+    || '';
+}
+
+function getMonthRangeGroups(monthGroups: MonthGroup[], startMonthId: string, endMonthId: string): MonthGroup[] {
+  const startMonth = monthGroups.find((month) => month.monthId === startMonthId);
+  const endMonth = monthGroups.find((month) => month.monthId === endMonthId) || startMonth;
+
+  if (!startMonth || !endMonth) {
+    return [];
+  }
+
+  const startSort = getMonthSortValue(startMonth.monthId);
+  const endSort = getMonthSortValue(endMonth.monthId);
+  const minSort = Math.min(startSort, endSort);
+  const maxSort = Math.max(startSort, endSort);
+
+  return monthGroups
+    .filter((month) => {
+      const monthSort = getMonthSortValue(month.monthId);
+
+      return monthSort >= minSort && monthSort <= maxSort;
+    })
+    .sort((left, right) => getMonthSortValue(left.monthId) - getMonthSortValue(right.monthId));
+}
+
+function formatMonthRangeLabel(monthGroups: MonthGroup[]): string {
+  if (monthGroups.length === 0) {
+    return '';
+  }
+
+  const firstMonth = monthGroups[0];
+  const lastMonth = monthGroups[monthGroups.length - 1];
+
+  return firstMonth.monthId === lastMonth.monthId
+    ? firstMonth.monthLabel
+    : `${firstMonth.monthLabel} to ${lastMonth.monthLabel}`;
+}
+
 export default function ReviewersPage() {
   const [reviewers, setReviewers] = useState<Reviewer[]>([]);
   const [protocols, setProtocols] = useState<Protocol[]>([]);
@@ -98,6 +149,7 @@ export default function ReviewersPage() {
   const [mailReviewer, setMailReviewer] = useState<Reviewer | null>(null);
   const [mailScope, setMailScope] = useState<MailScope>('month');
   const [selectedMailMonthId, setSelectedMailMonthId] = useState('');
+  const [selectedMailEndMonthId, setSelectedMailEndMonthId] = useState('');
   const [selectedMailWeekId, setSelectedMailWeekId] = useState('');
   const [sendingMail, setSendingMail] = useState(false);
   const [mailError, setMailError] = useState<string | null>(null);
@@ -165,10 +217,13 @@ export default function ReviewersPage() {
       }
 
       const monthGroups = groupProtocolsByMonth(fetchedProtocols);
+      const defaultMonthId = getDefaultMailMonthId(monthGroups);
+      const defaultMonth = monthGroups.find((month) => month.monthId === defaultMonthId);
 
       setProtocols(fetchedProtocols);
-      setSelectedMailMonthId((currentMonthId) => currentMonthId || monthGroups[0]?.monthId || '');
-      setSelectedMailWeekId((currentWeekId) => currentWeekId || monthGroups[0]?.weeks[0]?.weekId || '');
+      setSelectedMailMonthId((currentMonthId) => currentMonthId || defaultMonthId);
+      setSelectedMailEndMonthId((currentMonthId) => currentMonthId || defaultMonthId);
+      setSelectedMailWeekId((currentWeekId) => currentWeekId || defaultMonth?.weeks[0]?.weekId || '');
     } catch (err) {
       console.error('Error fetching protocol periods:', err);
       setProtocolError('Failed to load month and week options for reviewer email.');
@@ -317,12 +372,14 @@ export default function ReviewersPage() {
 
   const openMailModal = (reviewer: Reviewer) => {
     const reviewerMonthGroups = groupProtocolsByMonth(getProtocolsForReviewer(protocols, reviewer));
-    const firstMonth = reviewerMonthGroups[0];
+    const defaultMonthId = getDefaultMailMonthId(reviewerMonthGroups);
+    const defaultMonth = reviewerMonthGroups.find((month) => month.monthId === defaultMonthId);
 
     setMailReviewer(reviewer);
     setMailScope('month');
-    setSelectedMailMonthId(firstMonth?.monthId || '');
-    setSelectedMailWeekId(firstMonth?.weeks[0]?.weekId || '');
+    setSelectedMailMonthId(defaultMonthId);
+    setSelectedMailEndMonthId(defaultMonthId);
+    setSelectedMailWeekId(defaultMonth?.weeks[0]?.weekId || '');
     setMailError(null);
     setIsMailModalOpen(true);
   };
@@ -361,25 +418,59 @@ export default function ReviewersPage() {
     () => selectedMailMonth?.weeks.find((week) => week.weekId === selectedMailWeekId) || selectedMailMonth?.weeks[0],
     [selectedMailMonth, selectedMailWeekId]
   );
+  const selectedMailMonthRangeGroups = useMemo(
+    () => getMonthRangeGroups(
+      availableMailMonthGroups,
+      selectedMailMonthId,
+      selectedMailEndMonthId || selectedMailMonthId
+    ),
+    [availableMailMonthGroups, selectedMailEndMonthId, selectedMailMonthId]
+  );
+  const selectedMailPeriodLabel = useMemo(() => {
+    if (mailScope === 'week') {
+      return selectedMailMonth && selectedMailWeek
+        ? `${selectedMailMonth.monthLabel} ${selectedMailWeek.weekLabel}`
+        : '';
+    }
+
+    return formatMonthRangeLabel(selectedMailMonthRangeGroups);
+  }, [mailScope, selectedMailMonth, selectedMailMonthRangeGroups, selectedMailWeek]);
   const selectedIndividualProtocols = useMemo(() => {
-    if (!mailReviewer || !selectedMailMonth) {
+    if (!mailReviewer) {
       return [];
     }
 
     const periodProtocols = mailScope === 'week'
       ? selectedMailWeek?.protocols ?? []
-      : selectedMailMonth.protocols;
+      : selectedMailMonthRangeGroups.flatMap((month) => month.protocols);
 
     return periodProtocols.filter((protocol) =>
       (protocol.reviewers || []).some((reviewer) => isReviewerAssignmentMatch(reviewer, mailReviewer))
     );
-  }, [mailReviewer, mailScope, selectedMailMonth, selectedMailWeek]);
+  }, [mailReviewer, mailScope, selectedMailMonthRangeGroups, selectedMailWeek]);
 
   useEffect(() => {
-    if (!selectedMailMonthId && availableMailMonthGroups[0]) {
-      setSelectedMailMonthId(availableMailMonthGroups[0].monthId);
+    if (availableMailMonthGroups.length === 0) {
+      setSelectedMailMonthId('');
+      setSelectedMailEndMonthId('');
+      return;
     }
-  }, [availableMailMonthGroups, selectedMailMonthId]);
+
+    const hasSelectedStartMonth = availableMailMonthGroups.some((month) => month.monthId === selectedMailMonthId);
+    const hasSelectedEndMonth = availableMailMonthGroups.some((month) => month.monthId === selectedMailEndMonthId);
+
+    if (!selectedMailMonthId || !hasSelectedStartMonth) {
+      const defaultMonthId = getDefaultMailMonthId(availableMailMonthGroups);
+
+      setSelectedMailMonthId(defaultMonthId);
+      setSelectedMailEndMonthId(defaultMonthId);
+      return;
+    }
+
+    if (!selectedMailEndMonthId || !hasSelectedEndMonth) {
+      setSelectedMailEndMonthId(selectedMailMonthId);
+    }
+  }, [availableMailMonthGroups, selectedMailEndMonthId, selectedMailMonthId]);
 
   useEffect(() => {
     if (!selectedMailMonth) {
@@ -393,7 +484,7 @@ export default function ReviewersPage() {
   }, [selectedMailMonth, selectedMailWeekId]);
 
   const sendIndividualReviewerMail = async () => {
-    if (!mailReviewer || !selectedMailMonth) {
+    if (!mailReviewer) {
       return;
     }
 
@@ -402,8 +493,13 @@ export default function ReviewersPage() {
       return;
     }
 
-    if (mailScope === 'week' && !selectedMailWeek) {
+    if (mailScope === 'week' && (!selectedMailMonth || !selectedMailWeek)) {
       setMailError('Please select a week.');
+      return;
+    }
+
+    if (mailScope === 'month' && selectedMailMonthRangeGroups.length === 0) {
+      setMailError('Please select a month range.');
       return;
     }
 
@@ -428,6 +524,14 @@ export default function ReviewersPage() {
             })),
         }))
         .filter((protocol) => protocol.reviewers.length > 0);
+      const notificationMonthId = mailScope === 'week'
+        ? selectedMailMonth?.monthId
+        : selectedMailMonthRangeGroups[0]?.monthId;
+
+      if (!notificationMonthId || !selectedMailPeriodLabel) {
+        setMailError('Please select a valid month period.');
+        return;
+      }
 
       const response = await fetch('/api/admin/review-notifications', {
         method: 'POST',
@@ -436,8 +540,9 @@ export default function ReviewersPage() {
         },
         body: JSON.stringify({
           scope: mailScope,
-          monthDocumentId: selectedMailMonth.monthId,
+          monthDocumentId: notificationMonthId,
           weekId: mailScope === 'week' ? selectedMailWeek?.weekId : undefined,
+          periodLabel: selectedMailPeriodLabel,
           protocols: notificationProtocols,
         }),
       });
@@ -448,14 +553,11 @@ export default function ReviewersPage() {
       }
 
       const hasProblems = result.failed?.length > 0 || result.sent?.length === 0;
-      const periodLabel = mailScope === 'week'
-        ? `${selectedMailMonth.monthLabel} ${selectedMailWeek?.weekLabel}`
-        : selectedMailMonth.monthLabel;
 
       setIsMailModalOpen(false);
       setMailReviewer(null);
       showNotification(
-        `${mailReviewer.name} - ${periodLabel}: ${formatNotificationSummary(result as SendSummary)}. Track details on the Mailing page.`,
+        `${mailReviewer.name} - ${selectedMailPeriodLabel}: ${formatNotificationSummary(result as SendSummary)}. Track details on the Mailing page.`,
         hasProblems ? 'error' : 'success'
       );
     } catch (err) {
@@ -641,63 +743,113 @@ export default function ReviewersPage() {
                   }}
                   className="w-full p-2 border rounded-md"
                 >
-                  <option value="month">Full Month</option>
+                  <option value="month">Month Range</option>
                   <option value="week">Specific Week</option>
                 </select>
               </div>
 
-              <div>
-                <label htmlFor="mailMonth" className="block text-sm font-medium text-gray-700 mb-1">
-                  Month
-                </label>
-                <select
-                  id="mailMonth"
-                  value={selectedMailMonth?.monthId || ''}
-                  onChange={(e) => {
-                    const monthId = e.target.value;
-                    const month = availableMailMonthGroups.find((monthGroup) => monthGroup.monthId === monthId);
+              {mailScope === 'month' ? (
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div>
+                    <label htmlFor="mailStartMonth" className="block text-sm font-medium text-gray-700 mb-1">
+                      From Month
+                    </label>
+                    <select
+                      id="mailStartMonth"
+                      value={selectedMailMonthId}
+                      onChange={(e) => {
+                        const monthId = e.target.value;
 
-                    setSelectedMailMonthId(monthId);
-                    setSelectedMailWeekId(month?.weeks[0]?.weekId || '');
-                    setMailError(null);
-                  }}
-                  className="w-full p-2 border rounded-md"
-                >
-                  {availableMailMonthGroups.map((month) => (
-                    <option key={month.monthId} value={month.monthId}>
-                      {month.monthLabel}
-                    </option>
-                  ))}
-                </select>
-              </div>
+                        setSelectedMailMonthId(monthId);
+                        setSelectedMailEndMonthId((currentEndMonthId) => currentEndMonthId || monthId);
+                        setMailError(null);
+                      }}
+                      className="w-full p-2 border rounded-md"
+                    >
+                      {availableMailMonthGroups.map((month) => (
+                        <option key={month.monthId} value={month.monthId}>
+                          {month.monthLabel}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
 
-              {mailScope === 'week' && (
-                <div>
-                  <label htmlFor="mailWeek" className="block text-sm font-medium text-gray-700 mb-1">
-                    Week
-                  </label>
-                  <select
-                    id="mailWeek"
-                    value={selectedMailWeek?.weekId || ''}
-                    onChange={(e) => {
-                      setSelectedMailWeekId(e.target.value);
-                      setMailError(null);
-                    }}
-                    className="w-full p-2 border rounded-md"
-                  >
-                    {(selectedMailMonth?.weeks || []).map((week) => (
-                      <option key={week.weekId} value={week.weekId}>
-                        {week.weekLabel}
-                      </option>
-                    ))}
-                  </select>
+                  <div>
+                    <label htmlFor="mailEndMonth" className="block text-sm font-medium text-gray-700 mb-1">
+                      To Month
+                    </label>
+                    <select
+                      id="mailEndMonth"
+                      value={selectedMailEndMonthId || selectedMailMonthId}
+                      onChange={(e) => {
+                        setSelectedMailEndMonthId(e.target.value);
+                        setMailError(null);
+                      }}
+                      className="w-full p-2 border rounded-md"
+                    >
+                      {availableMailMonthGroups.map((month) => (
+                        <option key={month.monthId} value={month.monthId}>
+                          {month.monthLabel}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
+              ) : (
+                <>
+                  <div>
+                    <label htmlFor="mailMonth" className="block text-sm font-medium text-gray-700 mb-1">
+                      Month
+                    </label>
+                    <select
+                      id="mailMonth"
+                      value={selectedMailMonth?.monthId || ''}
+                      onChange={(e) => {
+                        const monthId = e.target.value;
+                        const month = availableMailMonthGroups.find((monthGroup) => monthGroup.monthId === monthId);
+
+                        setSelectedMailMonthId(monthId);
+                        setSelectedMailEndMonthId(monthId);
+                        setSelectedMailWeekId(month?.weeks[0]?.weekId || '');
+                        setMailError(null);
+                      }}
+                      className="w-full p-2 border rounded-md"
+                    >
+                      {availableMailMonthGroups.map((month) => (
+                        <option key={month.monthId} value={month.monthId}>
+                          {month.monthLabel}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label htmlFor="mailWeek" className="block text-sm font-medium text-gray-700 mb-1">
+                      Week
+                    </label>
+                    <select
+                      id="mailWeek"
+                      value={selectedMailWeek?.weekId || ''}
+                      onChange={(e) => {
+                        setSelectedMailWeekId(e.target.value);
+                        setMailError(null);
+                      }}
+                      className="w-full p-2 border rounded-md"
+                    >
+                      {(selectedMailMonth?.weeks || []).map((week) => (
+                        <option key={week.weekId} value={week.weekId}>
+                          {week.weekLabel}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </>
               )}
 
               <div className="rounded-md bg-gray-50 border border-gray-200 p-3 text-sm text-gray-700">
                 {availableMailMonthGroups.length === 0
                   ? 'No uploaded protocols match this reviewer yet. Check that the reviewer ID or name in the protocol assignment matches this reviewer record.'
-                  : `${selectedIndividualProtocols.length} protocol${selectedIndividualProtocols.length === 1 ? '' : 's'} will be included for this reviewer.`}
+                  : `${selectedMailPeriodLabel ? `${selectedMailPeriodLabel}: ` : ''}${selectedIndividualProtocols.length} protocol${selectedIndividualProtocols.length === 1 ? '' : 's'} will be included for this reviewer.`}
               </div>
             </div>
 
