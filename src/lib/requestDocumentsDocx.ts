@@ -6,11 +6,9 @@ import {
   createTimestampFileName,
   formatPeriodDisplay,
   formatPeso,
-  getCanonicalReviewerOrder,
-  type RequestDocumentPreviewRow,
-  type RequestDocumentRow,
   type RequestDocumentSummaryItem,
   type RequestDocumentsGenerationPayload,
+  type RequestDocumentsLevelPayload,
 } from '@/lib/requestDocuments';
 
 const WORD_NAMESPACE = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
@@ -131,22 +129,6 @@ function insertXmlBlocksBefore(target: Element, xmlBlocks: string[]): void {
   }
 }
 
-function appendXmlBlocks(parent: Element, xmlBlocks: string[]): void {
-  const xmlDocument = parent.ownerDocument;
-  const fragmentDocument = new DOMParser().parseFromString(
-    `<root xmlns:w="${WORD_NAMESPACE}">${xmlBlocks.join('')}</root>`,
-    'application/xml'
-  );
-
-  for (const block of getChildElements(fragmentDocument.documentElement)) {
-    const importedNode = typeof xmlDocument.importNode === 'function'
-      ? xmlDocument.importNode(block, true)
-      : block.cloneNode(true);
-
-    parent.appendChild(importedNode);
-  }
-}
-
 function removeElement(element: Element): void {
   if (element.parentNode) {
     element.parentNode.removeChild(element);
@@ -176,10 +158,6 @@ function createParagraphXml({
     <w:pPr>${spacing}${alignment}<w:rPr><w:rFonts w:ascii="${escapeXml(font)}" w:hAnsi="${escapeXml(font)}"/>${boldXml}<w:sz w:val="${size}"/><w:szCs w:val="${size}"/></w:rPr></w:pPr>
     ${text !== undefined ? `<w:r><w:rPr><w:rFonts w:ascii="${escapeXml(font)}" w:hAnsi="${escapeXml(font)}"/>${boldXml}<w:sz w:val="${size}"/><w:szCs w:val="${size}"/></w:rPr><w:t${preserveSpace}>${safeText}</w:t></w:r>` : ''}
   </w:p>`;
-}
-
-function createPageBreakXml(): string {
-  return '<w:p><w:r><w:br w:type="page"/></w:r></w:p>';
 }
 
 function calculateColumnWidths(headers: string[], preferredWidths?: number[]): number[] {
@@ -294,16 +272,20 @@ function formatLetterDate(dateToday: string): string {
   });
 }
 
-function buildCompleteListTable(headers: string[], previewRows: RequestDocumentPreviewRow[]): string[] {
-  const preferredWidths = headers.length === 8
+type LevelDocumentTables = RequestDocumentsLevelPayload & {
+  summary: RequestDocumentSummaryItem[];
+};
+
+function buildCompleteListTable(levelPayload: RequestDocumentsLevelPayload): string[] {
+  const preferredWidths = levelPayload.headers.length === 8
     ? [1152, 2160, 2592, 2880, 1728, 1728, 1728, 1728]
     : undefined;
-  const rows = previewRows.map((row) => headers.map((header) => row[header] ?? ''));
+  const rows = levelPayload.previewRows.map((row) => levelPayload.headers.map((header) => row[header] ?? ''));
 
   return [
-    createParagraphXml({ text: 'Complete List of Applications', align: 'center', bold: true, size: 22 }),
+    createParagraphXml({ text: `Complete List of ${levelPayload.educationLevel} Applications`, align: 'center', bold: true, size: 22 }),
     createParagraphXml(),
-    createTableXml(headers, rows, {
+    createTableXml(levelPayload.headers, rows, {
       preferredWidths,
       firstColumnAlign: 'center',
       otherColumnAlign: 'center',
@@ -312,17 +294,21 @@ function buildCompleteListTable(headers: string[], previewRows: RequestDocumentP
   ];
 }
 
-function buildSummaryTable(summary: RequestDocumentSummaryItem[], amountPerReview: number): string[] {
+function buildCompleteListTables(levels: RequestDocumentsLevelPayload[]): string[] {
+  return levels.flatMap((levelPayload) => buildCompleteListTable(levelPayload));
+}
+
+function buildSummaryTable(levelPayload: LevelDocumentTables): string[] {
   return [
-    createParagraphXml({ text: 'Summary of Reviewers', align: 'center', bold: true, size: 22 }),
+    createParagraphXml({ text: `Summary of ${levelPayload.educationLevel} Reviewers`, align: 'center', bold: true, size: 22 }),
     createParagraphXml(),
     createTableXml(
       [
         'Name of Reviewers',
         'Number of Required Proposals',
-        `Honorarium (${formatPeso(amountPerReview)} Per Proposal)`,
+        `Honorarium (${formatPeso(levelPayload.amountPerReview)} Per Proposal)`,
       ],
-      summary.map((item) => [
+      levelPayload.summary.map((item) => [
         item.reviewer,
         String(item.proposalCount),
         formatPeso(item.honorarium),
@@ -337,36 +323,8 @@ function buildSummaryTable(summary: RequestDocumentSummaryItem[], amountPerRevie
   ];
 }
 
-function buildVoucherSectionXml(
-  reviewer: string,
-  applications: string[],
-  periodDisplay: string,
-  amountPerReview: number
-): string[] {
-  const rows = applications.map((applicationCode) => [
-    applicationCode,
-    formatPeso(amountPerReview),
-  ]);
-  rows.push(['TOTAL', formatPeso(applications.length * amountPerReview)]);
-
-  return [
-    createParagraphXml({ text: `VOUCHER FOR: ${reviewer}`, align: 'center', bold: true, font: 'Tahoma', size: 28 }),
-    createParagraphXml(),
-    createParagraphXml({ text: `Period: ${periodDisplay}`, align: 'center', font: 'Tahoma', size: 24 }),
-    createParagraphXml(),
-    createTableXml(['Application Code', 'Amount'], rows, {
-      preferredWidths: [5760, 2160],
-      font: 'Tahoma',
-      headerSize: 22,
-      rowSize: 20,
-      firstColumnAlign: 'center',
-      otherColumnAlign: 'right',
-    }),
-    createParagraphXml(),
-    createParagraphXml(),
-    createParagraphXml({ text: 'Date: ___________________', align: 'center', font: 'Tahoma', size: 22 }),
-    createParagraphXml({ text: 'Received By: ___________________', align: 'center', font: 'Tahoma', size: 22 }),
-  ];
+function buildSummaryTables(levels: LevelDocumentTables[]): string[] {
+  return levels.flatMap((levelPayload) => buildSummaryTable(levelPayload));
 }
 
 async function finalizeZip(zip: JSZip, xml: string): Promise<Buffer> {
@@ -374,58 +332,61 @@ async function finalizeZip(zip: JSZip, xml: string): Promise<Buffer> {
   return zip.generateAsync({ type: 'nodebuffer' });
 }
 
-function buildReviewerApplications(rows: RequestDocumentRow[]): Map<string, string[]> {
-  const applicationsByReviewer = new Map<string, string[]>();
+function formatLevelText(levels: RequestDocumentsLevelPayload[]): string {
+  const levelNames = levels.map((levelPayload) => levelPayload.educationLevel);
 
-  for (const row of rows) {
-    const applicationCode = row.spupRecCode || row.or || 'Unknown';
-
-    for (const reviewer of [row.reviewer1, row.reviewer2, row.reviewer3]) {
-      const trimmedReviewer = reviewer.trim();
-
-      if (!trimmedReviewer) {
-        continue;
-      }
-
-      if (!applicationsByReviewer.has(trimmedReviewer)) {
-        applicationsByReviewer.set(trimmedReviewer, []);
-      }
-
-      applicationsByReviewer.get(trimmedReviewer)!.push(applicationCode);
-    }
+  if (levelNames.length <= 1) {
+    return levelNames[0] ?? 'Undergraduate and Graduate';
   }
 
-  return applicationsByReviewer;
+  return `${levelNames.slice(0, -1).join(', ')} and ${levelNames[levelNames.length - 1]}`;
+}
+
+function formatHonorariumRequestParagraph(levels: RequestDocumentsLevelPayload[]): string {
+  if (levels.length === 1) {
+    return `In this connection, may I respectfully request the honorarium of the Research Ethics Reviewers at ${formatPeso(levels[0].amountPerReview)} per review. Below is the summary of their outputs together with the honoraria due them:`;
+  }
+
+  const amounts = levels.map(
+    (levelPayload) => `${formatPeso(levelPayload.amountPerReview)} per ${levelPayload.educationLevel.toLowerCase()} review`
+  );
+
+  return `In this connection, may I respectfully request the honorarium of the Research Ethics Reviewers at ${amounts.slice(0, -1).join(', ')} and ${amounts[amounts.length - 1]}. Below is the summary of their outputs together with the honoraria due them:`;
 }
 
 export async function generateLetterDocument(
   payload: RequestDocumentsGenerationPayload,
-  summary: RequestDocumentSummaryItem[]
+  levelSummaries: LevelDocumentTables[]
 ): Promise<{ fileName: string; buffer: Buffer }> {
   const zip = await loadTemplateZip('Letter_Template.docx');
   const xml = await zip.file('word/document.xml')!.async('string');
   const xmlDocument = new DOMParser().parseFromString(xml, 'application/xml');
   const body = xmlDocument.getElementsByTagName('w:body')[0];
   const paragraphs = getChildElements(body).filter((child) => getElementName(child) === 'w:p');
+  const populatedLevels = levelSummaries.filter((levelPayload) => levelPayload.rows.length > 0);
   const replacements = new Map<string, string>([
     ['<<Date_Today>>', formatLetterDate(payload.dateToday)],
-    ['<<Level>>', payload.educationLevel],
+    ['<<Level>>', formatLevelText(populatedLevels)],
     ['<<Month_Year>>', formatPeriodDisplay(payload.periodStartMonth, payload.periodEndMonth, payload.year)],
-    ['<<Amount>>', String(payload.amountPerReview)],
   ]);
 
   for (const paragraph of paragraphs) {
     const paragraphText = getParagraphText(paragraph);
 
     if (paragraphText.includes('<<Complete_List_Table>>')) {
-      insertXmlBlocksBefore(paragraph, buildCompleteListTable(payload.headers, payload.previewRows));
+      insertXmlBlocksBefore(paragraph, buildCompleteListTables(populatedLevels));
       removeElement(paragraph);
       continue;
     }
 
     if (paragraphText.includes('<<Summary_Table>>')) {
-      insertXmlBlocksBefore(paragraph, buildSummaryTable(summary, payload.amountPerReview));
+      insertXmlBlocksBefore(paragraph, buildSummaryTables(populatedLevels));
       removeElement(paragraph);
+      continue;
+    }
+
+    if (paragraphText.includes('<<Amount>>')) {
+      rewriteParagraphText(paragraph, formatHonorariumRequestParagraph(populatedLevels));
       continue;
     }
 
@@ -442,59 +403,6 @@ export async function generateLetterDocument(
 
   return {
     fileName: createTimestampFileName('SPUP_REC_Letter'),
-    buffer: await finalizeZip(zip, new XMLSerializer().serializeToString(xmlDocument)),
-  };
-}
-
-export async function generateVoucherDocument(
-  payload: RequestDocumentsGenerationPayload
-): Promise<{ fileName: string; buffer: Buffer }> {
-  const zip = await loadTemplateZip('Template_Voucher.docx');
-  const xml = await zip.file('word/document.xml')!.async('string');
-  const xmlDocument = new DOMParser().parseFromString(xml, 'application/xml');
-  const body = xmlDocument.getElementsByTagName('w:body')[0];
-  const applicationsByReviewer = buildReviewerApplications(payload.rows);
-  const orderedReviewers = getCanonicalReviewerOrder().filter((reviewer) => applicationsByReviewer.has(reviewer));
-  const remainingReviewers = Array.from(applicationsByReviewer.keys())
-    .filter((reviewer) => !orderedReviewers.includes(reviewer))
-    .sort((left, right) => left.localeCompare(right));
-  const reviewers = [...orderedReviewers, ...remainingReviewers];
-  const sectionProperties = getChildElements(body).find((child) => getElementName(child) === 'w:sectPr');
-
-  for (const child of getChildElements(body)) {
-    if (sectionProperties && child === sectionProperties) {
-      continue;
-    }
-
-    removeElement(child);
-  }
-
-  const xmlBlocks: string[] = [];
-  const periodDisplay = formatPeriodDisplay(payload.periodStartMonth, payload.periodEndMonth, payload.year);
-
-  reviewers.forEach((reviewer, index) => {
-    if (index > 0) {
-      xmlBlocks.push(createPageBreakXml());
-    }
-
-    xmlBlocks.push(
-      ...buildVoucherSectionXml(
-        reviewer,
-        applicationsByReviewer.get(reviewer) ?? [],
-        periodDisplay,
-        payload.amountPerReview
-      )
-    );
-  });
-
-  if (sectionProperties) {
-    insertXmlBlocksBefore(sectionProperties, xmlBlocks);
-  } else {
-    appendXmlBlocks(body, xmlBlocks);
-  }
-
-  return {
-    fileName: createTimestampFileName('All_Vouchers'),
     buffer: await finalizeZip(zip, new XMLSerializer().serializeToString(xmlDocument)),
   };
 }

@@ -13,16 +13,19 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: validationErrors.join(' ') }, { status: 400 });
     }
 
-    const summary = buildSummaryFromRows(payload.rows, payload.amountPerReview);
+    const levelSummaries = payload.levels.map((levelPayload) => ({
+      ...levelPayload,
+      summary: buildSummaryFromRows(levelPayload.rows, levelPayload.amountPerReview),
+    }));
 
-    if (summary.length === 0) {
+    if (levelSummaries.every((levelPayload) => levelPayload.summary.length === 0)) {
       return NextResponse.json(
         { error: 'No reviewer summary could be generated from the provided rows.' },
         { status: 400 }
       );
     }
 
-    const { buffer, fileName } = await generateLetterDocument(payload, summary);
+    const { buffer, fileName } = await generateLetterDocument(payload, levelSummaries);
 
     return new NextResponse(buffer, {
       status: 200,

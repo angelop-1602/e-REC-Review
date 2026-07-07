@@ -73,19 +73,31 @@ export interface RequestDocumentsDataset {
   summary: RequestDocumentSummaryItem[];
 }
 
-export interface RequestDocumentsGenerationPayload {
-  dateToday: string;
+export interface RequestDocumentsLevelPayload {
   educationLevel: EducationLevel;
   amountPerReview: number;
-  periodStartMonth: string;
-  periodEndMonth: string;
-  year: number;
   headers: string[];
   previewRows: RequestDocumentPreviewRow[];
   rows: RequestDocumentRow[];
 }
 
+export interface RequestDocumentsGenerationPayload {
+  dateToday: string;
+  periodStartMonth: string;
+  periodEndMonth: string;
+  year: number;
+  levels: RequestDocumentsLevelPayload[];
+}
+
 type RawCsvRow = Record<string, unknown>;
+
+const REVIEWER_NAME_ALIASES = new Map<string, string>([
+  ['Dr. Nova Domingo', 'Dr. Nova R. Domingo'],
+  ['Mr. John Carlo Mampusti', 'Engr. John Carlo Mampusti'],
+  ['Mr. Serge Imperio', 'Mr. Sergio G. Imperio'],
+  ['Mr. Sergio Imperio', 'Mr. Sergio G. Imperio'],
+  ['Mrs. Elizabeth Iquin', 'Mrs. Elizabeth C. Iquin'],
+].map(([alias, canonicalName]) => [normalizeReviewerNameKey(alias), canonicalName]));
 
 const REQUIRED_COLUMN_SET = new Set<string>(
   REQUEST_DOCUMENT_REQUIRED_COLUMNS.map((header) => normalizeHeaderName(header))
@@ -105,6 +117,47 @@ function normalizeValue(value: unknown): string {
   }
 
   return String(value).trim();
+}
+
+function normalizeReviewerNameKey(name: string): string {
+  return name.trim().toLowerCase().replace(/[.,]/g, '').replace(/\s+/g, ' ');
+}
+
+function buildReviewerNameMap(registeredReviewerNames: string[]): Map<string, string> {
+  const reviewerNameMap = new Map<string, string>();
+
+  for (const reviewer of registeredReviewerNames) {
+    const trimmedReviewer = reviewer.trim();
+
+    if (trimmedReviewer) {
+      reviewerNameMap.set(normalizeReviewerNameKey(trimmedReviewer), trimmedReviewer);
+    }
+  }
+
+  for (const reviewer of getCanonicalReviewerSeeds()) {
+    const trimmedReviewer = reviewer.name.trim();
+
+    if (trimmedReviewer) {
+      reviewerNameMap.set(normalizeReviewerNameKey(trimmedReviewer), trimmedReviewer);
+    }
+  }
+
+  for (const [aliasKey, canonicalName] of REVIEWER_NAME_ALIASES.entries()) {
+    const canonicalKey = normalizeReviewerNameKey(canonicalName);
+    reviewerNameMap.set(aliasKey, reviewerNameMap.get(canonicalKey) ?? canonicalName);
+  }
+
+  return reviewerNameMap;
+}
+
+function canonicalizeReviewerName(reviewer: string, reviewerNameMap: Map<string, string>): string {
+  const trimmedReviewer = reviewer.trim();
+
+  if (!trimmedReviewer) {
+    return '';
+  }
+
+  return reviewerNameMap.get(normalizeReviewerNameKey(trimmedReviewer)) ?? trimmedReviewer;
 }
 
 function orderHeaders(headers: string[]): string[] {
@@ -177,14 +230,18 @@ export function calculateAmount(level: EducationLevel): number {
 }
 
 export function formatCurrency(amount: number): string {
-  return `₱${amount.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return `\u20b1${amount.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 export function formatPeso(amount: number): string {
-  return `₱${amount.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return `\u20b1${amount.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 export function formatPeriodDisplay(startMonth: string, endMonth: string, year: number): string {
+  if (startMonth === endMonth) {
+    return `${startMonth}, ${year}`;
+  }
+
   return `${startMonth}-${endMonth}, ${year}`;
 }
 
@@ -195,6 +252,7 @@ export function buildRequestDocumentsDataset(
 ): RequestDocumentsDataset {
   const headers = orderHeaders(rawHeaders.map((header) => header.trim()).filter(Boolean));
   const headerMap = buildHeaderMap(headers);
+  const reviewerNameMap = buildReviewerNameMap(registeredReviewerNames);
   const missingColumns = REQUEST_DOCUMENT_REQUIRED_COLUMNS.filter(
     (requiredHeader) => !headerMap.has(normalizeHeaderName(requiredHeader))
   );
@@ -220,9 +278,9 @@ export function buildRequestDocumentsDataset(
         principalInvestigator: getRowValue(row, headerMap, 'Principal Investigator'),
         researchTitle: getRowValue(row, headerMap, 'Research Title'),
         courseProgram: getRowValue(row, headerMap, 'Course/Program'),
-        reviewer1: getRowValue(row, headerMap, 'Reviewer #1'),
-        reviewer2: getRowValue(row, headerMap, 'Reviewer #2'),
-        reviewer3: getRowValue(row, headerMap, 'Reviewer #3'),
+        reviewer1: canonicalizeReviewerName(getRowValue(row, headerMap, 'Reviewer #1'), reviewerNameMap),
+        reviewer2: canonicalizeReviewerName(getRowValue(row, headerMap, 'Reviewer #2'), reviewerNameMap),
+        reviewer3: canonicalizeReviewerName(getRowValue(row, headerMap, 'Reviewer #3'), reviewerNameMap),
         extraFields: {},
       };
 
@@ -236,9 +294,6 @@ export function buildRequestDocumentsDataset(
     })
     .filter((row) => rowHasAnyValue(row));
 
-  const registeredReviewerSet = new Set(
-    registeredReviewerNames.map((reviewer) => reviewer.trim().toLowerCase())
-  );
   const allReviewers = Array.from(new Set(
     rows.flatMap((row) => [row.reviewer1, row.reviewer2, row.reviewer3])
       .map((reviewer) => reviewer.trim())
@@ -246,7 +301,7 @@ export function buildRequestDocumentsDataset(
   ));
   const unknownReviewers = registeredReviewerNames.length === 0
     ? []
-    : allReviewers.filter((reviewer) => !registeredReviewerSet.has(reviewer.toLowerCase()));
+    : allReviewers.filter((reviewer) => !reviewerNameMap.has(normalizeReviewerNameKey(reviewer)));
 
   return {
     headers,
@@ -303,24 +358,40 @@ export function validateGenerationPayload(payload: RequestDocumentsGenerationPay
     errors.push('Date is required.');
   }
 
-  if (!(payload.educationLevel in EDUCATION_LEVEL_AMOUNTS)) {
-    errors.push('Education level is invalid.');
-  }
-
-  if (!Number.isFinite(payload.amountPerReview) || payload.amountPerReview <= 0) {
-    errors.push('Amount per review must be a positive number.');
-  }
-
   if (!payload.periodStartMonth || !payload.periodEndMonth || !Number.isFinite(payload.year)) {
     errors.push('Period details are incomplete.');
   }
 
-  if (!Array.isArray(payload.headers) || payload.headers.length === 0) {
-    errors.push('Preview headers are required.');
+  if (!Array.isArray(payload.levels) || payload.levels.length === 0) {
+    errors.push('At least one education level dataset is required.');
+    return errors;
   }
 
-  if (!Array.isArray(payload.rows) || payload.rows.length === 0) {
-    errors.push('At least one valid CSV row is required.');
+  const seenLevels = new Set<EducationLevel>();
+
+  for (const levelPayload of payload.levels) {
+    if (!(levelPayload.educationLevel in EDUCATION_LEVEL_AMOUNTS)) {
+      errors.push('Education level is invalid.');
+      continue;
+    }
+
+    if (seenLevels.has(levelPayload.educationLevel)) {
+      errors.push(`${levelPayload.educationLevel} data was submitted more than once.`);
+    }
+
+    seenLevels.add(levelPayload.educationLevel);
+
+    if (levelPayload.amountPerReview !== EDUCATION_LEVEL_AMOUNTS[levelPayload.educationLevel]) {
+      errors.push(`${levelPayload.educationLevel} amount per review is invalid.`);
+    }
+
+    if (!Array.isArray(levelPayload.headers) || levelPayload.headers.length === 0) {
+      errors.push(`${levelPayload.educationLevel} preview headers are required.`);
+    }
+
+    if (!Array.isArray(levelPayload.rows) || levelPayload.rows.length === 0) {
+      errors.push(`${levelPayload.educationLevel} must include at least one valid CSV row.`);
+    }
   }
 
   return errors;
