@@ -3,7 +3,6 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { useEffect, useMemo, useState } from 'react';
-import { collection, collectionGroup, getDocs, query } from 'firebase/firestore';
 import {
   HiOutlineArrowRight,
   HiOutlineArrowUpTray,
@@ -16,14 +15,10 @@ import {
   HiOutlineFolderOpen,
   HiOutlineUsers,
 } from 'react-icons/hi2';
-import { db } from '@/lib/firebaseconfig';
 import {
-  WEEK_IDS,
   formatMonthLabel,
   formatWeekLabel,
-  getProtocolPathParts,
   groupProtocolsByMonth,
-  normalizeProtocolData,
   type MonthGroup,
   type Protocol,
 } from '@/lib/protocols';
@@ -499,29 +494,21 @@ export default function AdminDashboard() {
         setLoading(true);
         setError(null);
 
-        const fetchedProtocols: Protocol[] = [];
+        const [protocolResponse, reviewerResponse] = await Promise.all([
+          fetch('/api/admin/protocols', { cache: 'no-store' }),
+          fetch('/api/admin/reviewers', { cache: 'no-store' }),
+        ]);
+        const [protocolResult, reviewerResult] = await Promise.all([
+          protocolResponse.json(),
+          reviewerResponse.json(),
+        ]);
 
-        for (const weekId of WEEK_IDS) {
-          const protocolsGroupQuery = query(collectionGroup(db, weekId));
-          const protocolsGroupSnapshot = await getDocs(protocolsGroupQuery);
-
-          for (const protocolDoc of protocolsGroupSnapshot.docs) {
-            const pathParts = getProtocolPathParts(protocolDoc.ref.path);
-
-            if (!pathParts) {
-              continue;
-            }
-
-            fetchedProtocols.push(
-              normalizeProtocolData(protocolDoc.id, protocolDoc.data(), pathParts.monthId, pathParts.weekId)
-            );
-          }
+        if (!protocolResponse.ok || !reviewerResponse.ok) {
+          throw new Error(protocolResult.error || reviewerResult.error || 'Failed to load dashboard data.');
         }
 
-        const reviewersSnapshot = await getDocs(collection(db, 'reviewers'));
-
-        setProtocols(fetchedProtocols);
-        setReviewerCount(reviewersSnapshot.size);
+        setProtocols(protocolResult.protocols as Protocol[]);
+        setReviewerCount(reviewerResult.reviewers.length);
       } catch (dashboardError) {
         console.error('Error loading admin dashboard:', dashboardError);
         setError('Failed to load dashboard data. Please refresh and try again.');

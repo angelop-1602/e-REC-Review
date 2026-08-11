@@ -1,19 +1,23 @@
 import { isDueSoon, isOverdue } from '@/lib/utils';
-import type { Timestamp } from 'firebase/firestore';
 
 export const WEEK_IDS = ['week-1', 'week-2', 'week-3', 'week-4', 'week-5'] as const;
 
 export interface Reviewer {
+  assignmentId?: string;
+  internalId?: string;
   id: string;
   name: string;
   status: string;
   document_type?: string;
   form_type?: string;
   due_date?: string;
-  completed_at?: Timestamp | null;
+  completed_at?: string | null;
+  resolved?: boolean;
 }
 
 export interface Protocol {
+  protocolKey?: string;
+  internalId?: string;
   id: string;
   protocol_name: string;
   release_period: string;

@@ -1,8 +1,6 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { collection, query, where, getDocs, Timestamp } from 'firebase/firestore';
-import { db } from '@/lib/firebaseconfig';
 import Link from 'next/link';
 
 interface NoticeAlertProps {
@@ -16,25 +14,10 @@ export default function NoticeAlert({ userType }: NoticeAlertProps) {
   useEffect(() => {
     const fetchNoticeCount = async () => {
       try {
-        const currentDate = new Date();
-        const sevenDaysAgo = new Date(currentDate.getTime() - 7 * 24 * 60 * 60 * 1000);
-  
-        // Get all notices without filtering by expires_at
-        const noticesQuery = query(collection(db, 'notices'));
-        const querySnapshot = await getDocs(noticesQuery);
-  
-        // Filter on client side
-        const recentNotices = querySnapshot.docs.filter(doc => {
-          const data = doc.data();
-          const createdAt = data.created_at?.toDate?.();
-  
-          const notExpired = !data.expires_at || data.expires_at.toDate() > currentDate;
-          const recentlyCreated = createdAt && createdAt > sevenDaysAgo;
-  
-          return notExpired && recentlyCreated;
-        });
-  
-        setNoticeCount(recentNotices.length);
+        const response = await fetch('/api/notices');
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || 'Failed to load notice count');
+        setNoticeCount(Number(payload.recentCount) || 0);
       } catch (err) {
         console.error('Error fetching notice count:', err);
       } finally {
@@ -91,4 +74,4 @@ export default function NoticeAlert({ userType }: NoticeAlertProps) {
       )}
     </Link>
   );
-} 
+}

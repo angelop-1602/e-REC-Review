@@ -2,8 +2,6 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Papa from 'papaparse';
-import { collection, getDocs, orderBy, query } from 'firebase/firestore';
-import { db } from '@/lib/firebaseconfig';
 import { COLORS } from '@/lib/colors';
 import {
   REQUEST_DOCUMENT_MONTHS,
@@ -159,19 +157,17 @@ export default function RequestDocumentsPage() {
     const loadReviewers = async () => {
       try {
         setLoadingReviewers(true);
-        const reviewersQuery = query(collection(db, 'reviewers'), orderBy('name'));
-        const snapshot = await getDocs(reviewersQuery);
-        const names = snapshot.docs
-          .map((reviewerDoc) => {
-            const name = reviewerDoc.data().name;
-            return typeof name === 'string' ? name.trim() : '';
-          })
+        const response = await fetch('/api/admin/reviewers', { cache: 'no-store' });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Failed to load reviewers.');
+        const names = result.reviewers
+          .map((reviewer: { name?: string }) => reviewer.name?.trim() || '')
           .filter(Boolean);
 
         setRegisteredReviewers(names);
       } catch (error) {
         console.error('Failed to load reviewers for request documents:', error);
-        setActionError('Failed to load reviewers from Firestore. Reviewer validation warnings may be incomplete.');
+        setActionError('Failed to load reviewers from MySQL. Reviewer validation warnings may be incomplete.');
       } finally {
         setLoadingReviewers(false);
       }

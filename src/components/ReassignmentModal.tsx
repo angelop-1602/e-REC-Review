@@ -1,18 +1,19 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { doc, updateDoc, setDoc, Timestamp, collection } from 'firebase/firestore';
-import { db } from '@/lib/firebaseconfig';
-import { formatDate } from '@/lib/utils';
 
 interface Reviewer {
+  assignmentId?: string;
+  internalId?: string;
   id: string;
   name: string;
   form_type?: string;
   status?: string;
   due_date?: string;
-  completed_at?: Timestamp | null;
+  completed_at?: string | null;
 }
 
 interface Protocol {
+  protocolKey?: string;
+  internalId?: string;
   id: string;
   protocol_name: string;
   _path?: string;
@@ -119,7 +120,7 @@ export default function ReassignmentModal({
         }
       }
     }
-  }, [selectedReviewer]);
+  }, [selectedReviewer, protocol.due_date, reviewerList]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -167,92 +168,25 @@ export default function ReassignmentModal({
         throw new Error('New reviewer information is incomplete');
       }
 
-      // Determine the correct protocol document reference
-      let protocolRef;
-      if (protocol._path) {
-        const pathParts = protocol._path.split('/');
-        if (pathParts.length === 3) {
-          protocolRef = doc(db, 'protocols', pathParts[0], pathParts[1], pathParts[2]);
-        } else {
-          protocolRef = doc(db, 'protocols', protocol.id);
+      const protocolKey = protocol.protocolKey || protocol.internalId;
+      const assignmentId = currentReviewer.assignmentId || currentReviewer.internalId;
+      if (!protocolKey || !assignmentId) throw new Error('Protocol assignment identifier is missing.');
+      const response = await fetch(
+        `/api/admin/protocols/${encodeURIComponent(protocolKey)}/assignments/${encodeURIComponent(assignmentId)}/reassign`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            reviewerCode: newReviewerInfo.id,
+            status,
+            dueDate: status === 'In Progress' ? newDueDate : null,
+          }),
         }
-      } else {
-        protocolRef = doc(db, 'protocols', protocol.id);
-      }
+      );
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Failed to reassign protocol.');
 
-      console.log('Using protocol reference:', protocolRef.path);
-
-      // Create new reviewer object
-      const newReviewer: Reviewer = {
-        id: newReviewerInfo.id || '',
-        name: newReviewerInfo.name || '',
-        form_type: currentReviewer.form_type || '',
-        status: status,
-        due_date: status === 'In Progress' ? newDueDate : '',
-        completed_at: status === 'Completed' ? Timestamp.now() : null
-      };
-
-      console.log('Created new reviewer object:', newReviewer);
-
-      // Create audit entry
-      const timestamp = Timestamp.now();
-      const auditId = `${protocol.id}_${timestamp.toMillis()}`;
-      
-      const auditEntry = {
-        id: auditId,
-        from: currentReviewer.name,
-        to: newReviewerInfo.name,
-        date: timestamp,
-        type: 'reassignment',
-        status: status,
-        completed_at: status === 'Completed' ? timestamp : null
-      };
-
-      console.log('Created audit entry:', auditEntry);
-
-      // Create audit in protocol's subcollection
-      try {
-        // Get the correct path for the protocol
-        let protocolPath;
-        if (protocol._path) {
-          const pathParts = protocol._path.split('/');
-          if (pathParts.length === 3) {
-            protocolPath = `protocols/${pathParts[0]}/${pathParts[1]}/${pathParts[2]}`;
-          } else {
-            throw new Error('Invalid protocol path format');
-          }
-        } else {
-          throw new Error('Protocol path information missing');
-        }
-
-        const auditRef = doc(collection(db, `${protocolPath}/audits`), auditId);
-        await setDoc(auditRef, auditEntry);
-        console.log('Audit entry created successfully');
-
-        // Update only the selected reviewer in the reviewers array
-        const updatedReviewers = protocol.reviewers?.map(reviewer => 
-          reviewer.id === currentReviewer.id ? newReviewer : reviewer
-        ) || [newReviewer];
-
-        // Update the protocol with the updated reviewers array
-        await updateDoc(protocolRef, {
-          reviewers: updatedReviewers,
-          updated_at: timestamp
-        });
-
-        console.log('Protocol updated successfully');
-
-        // Call onSuccess with the new reviewer info
-        onSuccess({
-          id: newReviewerInfo.id,
-          name: newReviewerInfo.name,
-          due_date: newDueDate
-        });
-
-      } catch (err) {
-        console.error('Error updating protocol:', err);
-        throw new Error('Failed to update protocol');
-      }
+      onSuccess({ id: newReviewerInfo.id, name: newReviewerInfo.name, due_date: newDueDate });
 
     } catch (err) {
       console.error('Error in handleSubmit:', err);
@@ -379,4 +313,4 @@ export default function ReassignmentModal({
       </div>
     </div>
   );
-} 
+}

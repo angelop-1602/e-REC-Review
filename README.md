@@ -20,16 +20,6 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
-## Seed Reviewers
-
-Run the reviewer seeder to upsert the canonical reviewer list into Firestore:
-
-```bash
-npm run seed:reviewers
-```
-
-The script validates the canonical seed data first, then creates missing reviewers, updates renamed reviewers, and skips reviewers that are already up to date.
-
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:
@@ -44,4 +34,34 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
-asdas
+
+## Automatic Review Reminders
+
+The production deployment checks for upcoming review due dates every day at 8:00 AM Asia/Manila. The saved settings under **Admin > Notifications** determine whether reminders run daily, every Monday, or every Monday and Thursday, and how many days before the due date a review is included.
+
+Add a random value of at least 16 characters as `CRON_SECRET` in the deployment environment. The scheduler sends this value to `/api/cron/review-reminders` as a bearer token. The MySQL and `MAIL_*` environment variables are also required. After deployment, enable automatic reminders from **Admin > Notifications**.
+
+## Firestore Backup and MySQL Migration
+
+The one-time portable source snapshot has already been created. Independently verify it with:
+
+```powershell
+npm run backup:firestore:verify
+```
+
+Backup output is stored under the Git-ignored `backups/` directory. The native managed-export procedure and the one-time MySQL migration gates are documented in [docs/database-migration/firestore-backup.md](docs/database-migration/firestore-backup.md) and [docs/database-migration/plan.md](docs/database-migration/plan.md).
+
+The local MySQL 8.4 setup, migration, import, verification, backup, and restore-drill commands are in [docs/database-migration/local-mysql.md](docs/database-migration/local-mysql.md). The latest verified Firestore and MySQL reconciliation summary is recorded in [docs/database-migration/backup-status.md](docs/database-migration/backup-status.md).
+
+Start the seeded local database and application with:
+
+```powershell
+if (-not (Test-Path .env.local)) { Copy-Item .env.example .env.local }
+# Fill in the MySQL, mail, application, and reminder values in .env.local.
+npm run db:mysql:up
+npm run db:mysql:migrate
+npm run db:mysql:verify
+npm run dev
+```
+
+The project uses only `.env.local`; a separate MySQL environment file is not required.

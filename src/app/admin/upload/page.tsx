@@ -1,8 +1,6 @@
 'use client';
 
 import { useState, ChangeEvent } from 'react';
-import { doc, setDoc } from 'firebase/firestore';
-import { db } from '@/lib/firebaseconfig';
 import { getFormTypeName } from '@/lib/utils';
 
 // CSV Parser function
@@ -240,7 +238,7 @@ export default function CSVUploadPage() {
         );
         
         setMappedData(protocols);
-        setSuccess('CSV parsed successfully. Review the data below before uploading to Firebase.');
+        setSuccess('CSV parsed successfully. Review the data below before uploading to MySQL.');
         setLoading(false);
       } catch (error) {
         console.error('Error parsing CSV:', error);
@@ -257,7 +255,7 @@ export default function CSVUploadPage() {
     reader.readAsText(file);
   };
   
-  const uploadToFirebase = async () => {
+  const uploadToMysql = async () => {
     if (!mappedData || mappedData.length === 0) {
       setError('No data to upload');
       return;
@@ -361,13 +359,17 @@ export default function CSVUploadPage() {
           docId = baseProtocol.spup_rec_code || groupDocId;
           
           try {
-            console.log(`Creating protocol in structure: protocols/${monthId}/${weekId}/${docId}`);
-            
-            // Create directory structure using setDoc for nested collections
-            await setDoc(
-              doc(db, 'protocols', monthId, weekId, docId),
-              protocolData
-            );
+            console.log(`Creating protocol in MySQL: ${monthId}/${weekId}/${docId}`);
+            const response = await fetch('/api/admin/protocols', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ monthId, weekId, protocol: protocolData, upsert: true }),
+            });
+            const result = await response.json();
+
+            if (!response.ok) {
+              throw new Error(result.error || 'Failed to save protocol.');
+            }
             
             successCount++;
           } catch (err) {
@@ -382,10 +384,10 @@ export default function CSVUploadPage() {
         }
       }
       
-      setSuccess(`Successfully uploaded ${successCount} protocols to Firebase.`);
+      setSuccess(`Successfully uploaded ${successCount} protocols to MySQL.`);
     } catch (err) {
-      console.error('Error uploading to Firebase:', err);
-      setError(`Failed to upload to Firebase: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      console.error('Error uploading to MySQL:', err);
+      setError(`Failed to upload to MySQL: ${err instanceof Error ? err.message : 'Unknown error'}`);
     } finally {
       setLoading(false);
     }
@@ -421,10 +423,10 @@ export default function CSVUploadPage() {
           
           <button
             className="bg-green-500 hover:bg-green-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline"
-            onClick={uploadToFirebase}
+            onClick={uploadToMysql}
             disabled={!mappedData || loading}
           >
-            {loading ? 'Uploading...' : 'Upload to Firebase'}
+            {loading ? 'Uploading...' : 'Upload to MySQL'}
           </button>
         </div>
         
@@ -440,7 +442,7 @@ export default function CSVUploadPage() {
         <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200 overflow-x-auto">
           <h2 className="text-lg font-medium mb-2">Mapped Data Preview</h2>
           <p className="text-sm text-gray-500 mb-4">
-            Review this data before uploading to Firebase. We&apos;ve mapped your CSV to our protocol structure.
+            Review this data before uploading to MySQL. We&apos;ve mapped your CSV to our protocol structure.
           </p>
           
           <table className="min-w-full divide-y divide-gray-200">
@@ -501,4 +503,4 @@ export default function CSVUploadPage() {
       )}
     </div>
   );
-} 
+}

@@ -1,8 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { formatDate, getFormTypeName, isOverdue, isDueSoon, getReviewerFormType } from '@/lib/utils';
-import { doc, collection, getDocs, query, where, orderBy, getDoc, Timestamp } from 'firebase/firestore';
-import { db } from '@/lib/firebaseconfig';
-import ReassignmentModal from './ReassignmentModal';
+import { formatDate, getFormTypeName, isOverdue, isDueSoon } from '@/lib/utils';
 
 interface Reviewer {
   id: string;
@@ -10,10 +7,12 @@ interface Reviewer {
   status: string;
   form_type?: string;
   due_date?: string;
-  completed_at?: Timestamp | null;
+  completed_at?: string | null;
 }
 
 interface Protocol {
+  protocolKey?: string;
+  internalId?: string;
   id: string;
   protocol_name: string;
   release_period: string;
@@ -26,8 +25,8 @@ interface Protocol {
   form_type?: string;
   created_at: string;
   last_audit_id?: string;
-  last_audit_date?: any;
-  updated_at?: any;
+  last_audit_date?: string | null;
+  updated_at?: string | null;
   _path?: string;
   last_reviewer?: string;
   relatedProtocols?: Protocol[];
@@ -39,12 +38,12 @@ interface AuditEntry {
   protocol_name: string;
   from: string;
   to: string;
-  date: any;
-  previous_due_date: string;
-  new_due_date: string;
+  date: string;
+  previous_due_date?: string;
+  new_due_date?: string;
   type: string;
   status: string;
-  timestamp: any;
+  timestamp?: string;
 }
 
 interface ProtocolDetailsModalProps {
@@ -52,25 +51,17 @@ interface ProtocolDetailsModalProps {
   protocol: Protocol | null;
   onClose: () => void;
   onReassign?: (protocol: Protocol, reviewerId: string, reviewerName: string) => void;
-  reviewerList: { id: string; name: string }[];
 }
 
 export default function ProtocolDetailsModal({
   isOpen,
   protocol,
   onClose,
-  onReassign,
-  reviewerList
+  onReassign
 }: ProtocolDetailsModalProps) {
   const [auditHistory, setAuditHistory] = useState<AuditEntry[]>([]);
   const [loadingAudit, setLoadingAudit] = useState(false);
   const [localProtocol, setLocalProtocol] = useState<Protocol | null>(null);
-  const [reassignModalOpen, setReassignModalOpen] = useState(false);
-  const [reassignmentData, setReassignmentData] = useState<{
-    protocol: Protocol;
-    reviewerId: string;
-    reviewerName: string;
-  } | null>(null);
 
   useEffect(() => {
     if (protocol) {
@@ -85,34 +76,12 @@ export default function ProtocolDetailsModal({
       try {
         setLoadingAudit(true);
         
-        // Get the protocol reference
-        let protocolRef;
-        if (localProtocol._path) {
-          const pathParts = localProtocol._path.split('/');
-          if (pathParts.length === 3) {
-            protocolRef = doc(db, 'protocols', pathParts[0], pathParts[1], pathParts[2]);
-          } else {
-            console.error('Invalid protocol path format');
-            return;
-          }
-        } else {
-          console.error('Protocol path information missing');
-          return;
-        }
-        
-        // Query the audits subcollection
-        const auditsRef = collection(protocolRef, 'audits');
-        const q = query(auditsRef, orderBy('date', 'desc'));
-        
-        const auditSnap = await getDocs(q);
-        
-        const auditEntries: AuditEntry[] = [];
-        auditSnap.forEach((doc) => {
-          const data = doc.data() as AuditEntry;
-          auditEntries.push(data);
-        });
-        
-        setAuditHistory(auditEntries);
+        const protocolKey = localProtocol.protocolKey || localProtocol.internalId;
+        if (!protocolKey) return;
+        const response = await fetch(`/api/admin/protocols/${encodeURIComponent(protocolKey)}/audits`, { cache: 'no-store' });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Failed to load audit history.');
+        setAuditHistory(result.audits as AuditEntry[]);
       } catch (err) {
         console.error('Error fetching audit history:', err);
       } finally {
@@ -123,77 +92,7 @@ export default function ProtocolDetailsModal({
     fetchAuditHistory();
   }, [localProtocol, isOpen]);
 
-  const handleReassign = (protocol: Protocol, reviewerId: string, reviewerName: string) => {
-    setReassignmentData({
-      protocol,
-      reviewerId,
-      reviewerName
-    });
-    setReassignModalOpen(true);
-  };
-
-  const handleReassignmentSuccess = async (updatedReviewer: { id: string; name: string; due_date: string }) => {
-    if (localProtocol && reassignmentData) {
-      // Optimistically update the local reviewer list
-      const updatedProtocol = {
-        ...localProtocol,
-        reviewers: localProtocol.reviewers?.map(r =>
-          r.id === reassignmentData.reviewerId
-            ? { ...r, id: updatedReviewer.id, name: updatedReviewer.name, due_date: updatedReviewer.due_date, status: 'In Progress' }
-            : r
-        )
-      };
-      setLocalProtocol(updatedProtocol);
-
-      // Now refetch from Firestore to ensure consistency
-      let protocolRef;
-      if (localProtocol._path) {
-        const pathParts = localProtocol._path.split('/');
-        if (pathParts.length === 3) {
-          protocolRef = doc(db, 'protocols', pathParts[0], pathParts[1], pathParts[2]);
-        } else {
-          protocolRef = doc(db, 'protocols', localProtocol.id);
-        }
-      } else {
-        protocolRef = doc(db, 'protocols', localProtocol.id);
-      }
-
-      // Fetch the latest protocol data
-      const protocolSnap = await getDoc(protocolRef);
-      if (protocolSnap.exists()) {
-        const snapData = protocolSnap.data();
-        setLocalProtocol(prev => ({
-          ...prev,
-          ...snapData,
-          id: protocolSnap.id,
-          protocol_name: snapData.protocol_name ?? prev?.protocol_name ?? '',
-          release_period: snapData.release_period ?? prev?.release_period ?? '',
-          academic_level: snapData.academic_level ?? prev?.academic_level ?? '',
-          due_date: snapData.due_date ?? prev?.due_date ?? '',
-          status: snapData.status ?? prev?.status ?? '',
-          protocol_file: snapData.protocol_file ?? prev?.protocol_file ?? '',
-          created_at: snapData.created_at ?? prev?.created_at ?? '',
-        }));
-      }
-    }
-    setReassignModalOpen(false);
-    setReassignmentData(null);
-  };
-
   if (!isOpen || !localProtocol) return null;
-  
-  // Function to get status badge with appropriate styling
-  const getStatusBadge = (status: string, dueDate: string) => {
-    if (status === 'Completed') {
-      return <span className="bg-green-100 text-green-800 text-xs px-2 py-1 rounded-full">Completed</span>;
-    } else if (isOverdue(dueDate)) {
-      return <span className="bg-red-100 text-red-800 text-xs px-2 py-1 rounded-full">Overdue</span>;
-    } else if (isDueSoon(dueDate)) {
-      return <span className="bg-yellow-100 text-yellow-800 text-xs px-2 py-1 rounded-full">Due Soon</span>;
-    } else {
-      return <span className="bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded-full">In Progress</span>;
-    }
-  };
 
   // Function to get status badge with appropriate styling
   const getReviewerStatusBadge = (status: string, dueDate: string) => {
@@ -242,7 +141,7 @@ export default function ProtocolDetailsModal({
   function getLatestCompletedDate(reviewers: Reviewer[]): string | null {
     const completedDates = reviewers
       .filter(r => r.status === 'Completed' && r.completed_at)
-      .map(r => r.completed_at instanceof Timestamp ? r.completed_at.toDate().toISOString() : null)
+      .map(r => typeof r.completed_at === 'string' ? r.completed_at : null)
       .filter((date): date is string => date !== null)
       .sort((a, b) => (a > b ? -1 : 1)); // Sort descending
     return completedDates.length > 0 ? completedDates[0] : null;
@@ -343,8 +242,8 @@ export default function ProtocolDetailsModal({
                 <tbody className="divide-y divide-gray-200">
                   {localProtocol.reviewers.map((reviewer, index) => {
                     const formInfo = getReviewerFormType(localProtocol, reviewer.id, reviewer.name);
-                    const completedDate = reviewer.completed_at instanceof Timestamp 
-                      ? reviewer.completed_at.toDate().toISOString()
+                    const completedDate = typeof reviewer.completed_at === 'string'
+                      ? reviewer.completed_at
                       : null;
                     return (
                     <tr key={index} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
@@ -360,7 +259,6 @@ export default function ProtocolDetailsModal({
                           {reviewer.status !== 'Completed' && onReassign && (
                           <button
                               onClick={() => {
-                                const formInfo = getReviewerFormType(localProtocol, reviewer.id, reviewer.name);
                                 onReassign(localProtocol, reviewer.id, reviewer.name);
                               }}
                               className="text-blue-600 hover:text-blue-800 font-medium border border-blue-200 rounded px-3 py-1 transition-colors"
@@ -386,7 +284,6 @@ export default function ProtocolDetailsModal({
                     {localProtocol.status !== 'Completed' && onReassign && (
                       <button
                         onClick={() => {
-                          const formInfo = getReviewerFormType(localProtocol, localProtocol.reviewer || '', localProtocol.reviewer || '');
                           onReassign(localProtocol, localProtocol.reviewer || '', localProtocol.reviewer || '');
                         }}
                         className="text-blue-600 hover:text-blue-800 font-medium ml-3 border border-blue-200 rounded px-3 py-1 transition-colors"
@@ -422,15 +319,15 @@ export default function ProtocolDetailsModal({
                           <span className="text-gray-600">{entry.to}</span>
                         </p>
                         <p className="text-xs text-gray-500 mt-1">
-                          Date: {formatDate(entry.date.toDate())}
+                          Date: {formatDate(String(entry.date))}
                         </p>
                       </div>
                       <div className="text-right">
                         <p className="text-xs text-gray-500">
-                          Previous due date: {formatDate(entry.previous_due_date)}
+                          Previous due date: {entry.previous_due_date ? formatDate(entry.previous_due_date) : 'Not recorded'}
                         </p>
                         <p className="text-xs text-gray-500">
-                          New due date: {formatDate(entry.new_due_date)}
+                          New due date: {entry.new_due_date ? formatDate(entry.new_due_date) : 'Not recorded'}
                         </p>
                       </div>
                     </div>
@@ -453,24 +350,6 @@ export default function ProtocolDetailsModal({
         </div>
       </div>
 
-      {/* Reassignment Modal */}
-      {reassignmentData && (
-        <ReassignmentModal
-          isOpen={reassignModalOpen}
-          protocol={reassignmentData.protocol}
-          currentReviewer={
-            localProtocol?.reviewers?.find(r => r.id === reassignmentData.reviewerId)
-            || { id: reassignmentData.reviewerId, name: reassignmentData.reviewerName, status: 'In Progress', due_date: localProtocol?.due_date || '' }
-          }
-          reviewerList={reviewerList}
-          loading={false}
-          onCancel={() => {
-            setReassignModalOpen(false);
-            setReassignmentData(null);
-          }}
-          onSuccess={handleReassignmentSuccess}
-        />
-      )}
     </div>
   );
-} 
+}

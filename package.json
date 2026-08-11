@@ -7,8 +7,14 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "seed:reviewers": "node scripts/seed-reviewers.mjs",
-    "cleanup:reviewers": "node scripts/cleanup-duplicate-reviewers.mjs"
+    "backup:firestore:verify": "node scripts/verify-firestore-backup.mjs",
+    "backup:firestore:verify-managed": "node scripts/verify-firestore-managed-backup.mjs",
+    "db:mysql:up": "docker compose --env-file .env.local -f compose.mysql.yml up -d --wait mysql",
+    "db:mysql:down": "docker compose --env-file .env.local -f compose.mysql.yml down",
+    "db:mysql:status": "docker compose --env-file .env.local -f compose.mysql.yml ps",
+    "db:mysql:migrate": "node --env-file=.env.local scripts/apply-mysql-migrations.mjs",
+    "db:mysql:import": "node --env-file=.env.local scripts/import-firestore-to-mysql.mjs",
+    "db:mysql:verify": "node --env-file=.env.local scripts/verify-mysql-import.mjs"
   },
   "dependencies": {
     "@types/nodemailer": "^8.0.1",
@@ -18,8 +24,8 @@
     "chart.js": "^4.4.9",
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
-    "firebase": "^11.7.1",
     "jszip": "^3.10.1",
+    "mysql2": "^3.23.3",
     "next": "15.3.8",
     "nodemailer": "^9.0.1",
     "papaparse": "^5.5.2",

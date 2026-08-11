@@ -1,8 +1,6 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { collection, addDoc, getDocs, query, orderBy, doc, deleteDoc, Timestamp, updateDoc, getDoc } from 'firebase/firestore';
-import { db } from '@/lib/firebaseconfig';
 import { format } from 'date-fns';
 import { COLORS, STYLES } from '@/lib/colors';
 
@@ -11,8 +9,8 @@ interface Notice {
   title: string;
   content: string;
   priority: 'none' | 'low' | 'medium' | 'high';
-  created_at: Timestamp;
-  expires_at: Timestamp;
+  created_at: string;
+  expires_at: string | null;
   likes?: string[]; // Array of reviewer IDs who liked this notice
 }
 
@@ -62,16 +60,10 @@ export default function AdminNoticesPage() {
   const fetchNotices = async () => {
     try {
       setLoading(true);
-      const noticesQuery = query(collection(db, 'notices'), orderBy('created_at', 'desc'));
-      const querySnapshot = await getDocs(noticesQuery);
-      
-      const fetchedNotices: Notice[] = [];
-      querySnapshot.forEach((doc) => {
-        fetchedNotices.push({
-          id: doc.id,
-          ...doc.data()
-        } as Notice);
-      });
+      const response = await fetch('/api/admin/notices');
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || 'Failed to load notices');
+      const fetchedNotices = payload.notices as Notice[];
       
       setNotices(fetchedNotices);
       calculateStats(fetchedNotices);
@@ -101,7 +93,7 @@ export default function AdminNoticesPage() {
       }
       
       // Count active notices (not expired)
-      if (notice.expires_at && notice.expires_at.toDate() > currentDate) {
+      if (!notice.expires_at || new Date(notice.expires_at) > currentDate) {
         activeNoticesCount++;
       }
       
@@ -138,45 +130,23 @@ export default function AdminNoticesPage() {
       setIsSubmitting(true);
       setError(null);
       
-      // Use null for no expiration, otherwise convert the date to a timestamp
-      const expiryTimestamp = noExpiry ? null : Timestamp.fromDate(new Date(expiryDate));
-      
-      if (editMode && currentNoticeId) {
-        // Update existing notice
-        const noticeRef = doc(db, 'notices', currentNoticeId);
-        const noticeDoc = await getDoc(noticeRef);
-        
-        if (!noticeDoc.exists()) {
-          throw new Error('Notice not found');
+      const response = await fetch(
+        editMode && currentNoticeId ? `/api/admin/notices/${currentNoticeId}` : '/api/admin/notices',
+        {
+          method: editMode && currentNoticeId ? 'PATCH' : 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title,
+            content,
+            priority,
+            expiresAt: noExpiry ? null : expiryDate,
+          }),
         }
-        
-        // Preserve likes array and created_at timestamp
-        const existingData = noticeDoc.data();
-        
-        await updateDoc(noticeRef, {
-          title,
-          content,
-          priority,
-          expires_at: expiryTimestamp,
-          // Keep the original created_at and likes
-          created_at: existingData.created_at,
-          likes: existingData.likes || []
-        });
-        
-        setSuccess('Notice updated successfully!');
-      } else {
-        // Create new notice
-        await addDoc(collection(db, 'notices'), {
-          title,
-          content,
-          priority,
-          created_at: Timestamp.now(),
-          expires_at: expiryTimestamp,
-          likes: [] // Initialize with empty likes array
-        });
-        
-        setSuccess('Notice created successfully!');
-      }
+      );
+      const responsePayload = await response.json();
+      if (!response.ok) throw new Error(responsePayload.error || 'Failed to save notice');
+
+      setSuccess(editMode ? 'Notice updated successfully!' : 'Notice created successfully!');
       
       // Reset form and state
       resetForm();
@@ -208,11 +178,7 @@ export default function AdminNoticesPage() {
     // Check if notice has an expiration date
     if (notice.expires_at) {
       setNoExpiry(false);
-      // Format the expiry date for the date input
-      if (notice.expires_at.toDate) {
-        const expiryDate = notice.expires_at.toDate();
-        setExpiryDate(expiryDate.toISOString().split('T')[0]);
-      }
+      setExpiryDate(new Date(notice.expires_at).toISOString().split('T')[0]);
     } else {
       setNoExpiry(true);
     }
@@ -242,14 +208,16 @@ export default function AdminNoticesPage() {
   };
   
   const handleDelete = async (noticeId: string) => {
-    if (!confirm('Are you sure you want to delete this notice?')) {
+    if (!confirm('Archive this notice? It will be hidden but retained in the database.')) {
       return;
     }
     
     try {
       setLoading(true);
-      await deleteDoc(doc(db, 'notices', noticeId));
-      setSuccess('Notice deleted successfully!');
+      const response = await fetch(`/api/admin/notices/${noticeId}`, { method: 'DELETE' });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || 'Failed to archive notice');
+      setSuccess('Notice archived successfully!');
       // Refresh the notices list
       fetchNotices();
       
@@ -260,7 +228,7 @@ export default function AdminNoticesPage() {
       
     } catch (err) {
       console.error('Error deleting notice:', err);
-      setError('Failed to delete notice');
+      setError('Failed to archive notice');
     } finally {
       setLoading(false);
     }
@@ -279,9 +247,9 @@ export default function AdminNoticesPage() {
     }
   };
   
-  const formatDateNice = (timestamp: Timestamp) => {
-    if (!timestamp || !timestamp.toDate) return 'Never expires';
-    return format(timestamp.toDate(), 'MMM d, yyyy h:mm a');
+  const formatDateNice = (timestamp: string | null) => {
+    if (!timestamp) return 'Never expires';
+    return format(new Date(timestamp), 'MMM d, yyyy h:mm a');
   };
   
   return (
@@ -547,7 +515,7 @@ export default function AdminNoticesPage() {
                       onClick={() => handleDelete(notice.id)}
                       className="text-red-600 hover:text-red-800"
                     >
-                      Delete
+                      Archive
                     </button>
                   </div>
                 </div>
@@ -559,4 +527,4 @@ export default function AdminNoticesPage() {
       </div>
     </div>
   );
-} 
+}

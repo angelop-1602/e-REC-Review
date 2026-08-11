@@ -2,19 +2,40 @@
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import React, { useState, useEffect } from 'react';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
-import { db } from '@/lib/firebaseconfig';
 
 
 interface NotificationSettings {
   enabled: boolean;
   frequency: 'daily' | 'weekly' | 'twice-weekly';
   sendToReviewers: boolean;
-  sendToAdmins: boolean;
-  adminEmails: string[];
-  overdueThreshold: number;  // Days after due date to send notification
   dueSoonThreshold: number;  // Days before due date to send notification
   lastRun?: string;          // ISO date string of last notification run
+}
+
+function normalizeNotificationSettings(data: Record<string, unknown>): NotificationSettings {
+  const frequency = data.frequency === 'weekly' || data.frequency === 'twice-weekly'
+    ? data.frequency
+    : 'daily';
+  const threshold = Number(data.dueSoonThreshold);
+  let lastRun: string | undefined;
+
+  if (typeof data.lastRun === 'string') {
+    lastRun = data.lastRun;
+  } else if (data.lastRun && typeof data.lastRun === 'object' && 'toDate' in data.lastRun) {
+    try {
+      lastRun = (data.lastRun as { toDate: () => Date }).toDate().toISOString();
+    } catch {
+      lastRun = undefined;
+    }
+  }
+
+  return {
+    enabled: data.enabled === true,
+    frequency,
+    sendToReviewers: data.sendToReviewers !== false,
+    dueSoonThreshold: Number.isInteger(threshold) ? Math.min(14, Math.max(1, threshold)) : 3,
+    lastRun,
+  };
 }
 
 export default function NotificationsSettingsPage() {
@@ -22,16 +43,11 @@ export default function NotificationsSettingsPage() {
     enabled: false,
     frequency: 'daily',
     sendToReviewers: true,
-    sendToAdmins: true,
-    adminEmails: [],
-    overdueThreshold: 1,
     dueSoonThreshold: 3
   });
   
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [emailInput, setEmailInput] = useState('');
-  
   const [notification, setNotification] = useState<{
     isOpen: boolean;
     type: 'success' | 'error' | 'info' | 'warning';
@@ -58,28 +74,10 @@ export default function NotificationsSettingsPage() {
       try {
         setLoading(true);
         
-        // Fetch notification settings from Firestore
-        const settingsRef = doc(db, 'system', 'notification_settings');
-        const settingsSnap = await getDoc(settingsRef);
-        
-        if (settingsSnap.exists()) {
-          setSettings(settingsSnap.data() as NotificationSettings);
-        } else {
-          // Use default settings
-          const defaultSettings: NotificationSettings = {
-            enabled: false,
-            frequency: 'daily',
-            sendToReviewers: true,
-            sendToAdmins: true,
-            adminEmails: [],
-            overdueThreshold: 1,
-            dueSoonThreshold: 3
-          };
-          
-          // Save default settings to Firestore
-          await setDoc(settingsRef, defaultSettings);
-          setSettings(defaultSettings);
-        }
+        const response = await fetch('/api/admin/notification-settings');
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || 'Failed to load settings');
+        setSettings(normalizeNotificationSettings(payload.settings));
       } catch (error) {
         console.error('Error fetching notification settings:', error);
         showNotification('error', 'Error', 'Failed to load notification settings');
@@ -95,9 +93,14 @@ export default function NotificationsSettingsPage() {
     try {
       setSaving(true);
       
-      // Update settings in Firestore
-      const settingsRef = doc(db, 'system', 'notification_settings');
-      await setDoc(settingsRef, settings);
+      const response = await fetch('/api/admin/notification-settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(settings),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || 'Failed to save settings');
+      setSettings(normalizeNotificationSettings(payload.settings));
       
       showNotification('success', 'Settings Saved', 'Notification settings have been saved successfully');
     } catch (error) {
@@ -106,35 +109,6 @@ export default function NotificationsSettingsPage() {
     } finally {
       setSaving(false);
     }
-  };
-
-  const handleAddEmail = () => {
-    if (!emailInput.trim()) return;
-    
-    // Basic email validation
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(emailInput)) {
-      showNotification('warning', 'Invalid Email', 'Please enter a valid email address');
-      return;
-    }
-    
-    // Add email to the list if it doesn't already exist
-    if (!settings.adminEmails.includes(emailInput)) {
-      setSettings({
-        ...settings,
-        adminEmails: [...settings.adminEmails, emailInput]
-      });
-      setEmailInput('');
-    } else {
-      showNotification('warning', 'Duplicate Email', 'This email address is already in the list');
-    }
-  };
-
-  const handleRemoveEmail = (email: string) => {
-    setSettings({
-      ...settings,
-      adminEmails: settings.adminEmails.filter(e => e !== email)
-    });
   };
 
   if (loading) {
@@ -147,10 +121,28 @@ export default function NotificationsSettingsPage() {
 
   return (
     <div className="container mx-auto px-4 py-8">
-      <h1 className="text-2xl font-bold mb-6">Notification Settings</h1>
+      <h1 className="text-2xl font-bold mb-6">Automatic Review Reminders</h1>
+
+      {notification.isOpen && (
+        <div
+          className={`mb-6 rounded-md border px-4 py-3 text-sm ${
+            notification.type === 'error'
+              ? 'border-red-200 bg-red-50 text-red-700'
+              : notification.type === 'warning'
+                ? 'border-amber-200 bg-amber-50 text-amber-700'
+                : notification.type === 'success'
+                  ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                  : 'border-blue-200 bg-blue-50 text-blue-700'
+          }`}
+          role="status"
+        >
+          <p className="font-medium">{notification.title}</p>
+          <p className="mt-1">{notification.message}</p>
+        </div>
+      )}
       
       <div className="bg-white rounded-lg shadow p-6 mb-8">
-        <h2 className="text-xl font-semibold mb-4">Email Notifications</h2>
+        <h2 className="text-xl font-semibold mb-4">Reminder Email Settings</h2>
         
         <div className="space-y-6">
           {/* Enable/Disable Notifications */}
@@ -166,10 +158,10 @@ export default function NotificationsSettingsPage() {
             </div>
             <div className="ml-3 text-sm leading-6">
               <label htmlFor="notifications-enabled" className="font-medium text-gray-900">
-                Enable Email Notifications
+                Enable Automatic Reminders
               </label>
               <p className="text-gray-500">
-                When enabled, the system will send automatic email notifications about overdue protocols.
+                At 8:00 AM Manila time, the system checks for reviews nearing their due date and emails only reviewers who have not completed them.
               </p>
             </div>
           </div>
@@ -216,104 +208,15 @@ export default function NotificationsSettingsPage() {
                   Send to Reviewers
                 </label>
                 <p className="text-gray-500">
-                  Notify reviewers about their own overdue protocols.
+                  Send each reviewer only their own unfinished reviews that are within the due-soon window.
                 </p>
               </div>
             </div>
             
-            <div className="flex items-start">
-              <div className="flex h-6 items-center">
-                <input
-                  id="send-to-admins"
-                  type="checkbox"
-                  className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-600"
-                  checked={settings.sendToAdmins}
-                  onChange={(e) => setSettings({ ...settings, sendToAdmins: e.target.checked })}
-                  disabled={!settings.enabled}
-                />
-              </div>
-              <div className="ml-3 text-sm leading-6">
-                <label htmlFor="send-to-admins" className="font-medium text-gray-900">
-                  Send to Administrators
-                </label>
-                <p className="text-gray-500">
-                  Send a summary of all overdue protocols to administrators.
-                </p>
-              </div>
-            </div>
           </div>
-          
-          {/* Admin Email List */}
-          {settings.sendToAdmins && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Administrator Email Addresses
-              </label>
-              
-              <div className="flex mb-2">
-                <input
-                  type="email"
-                  value={emailInput}
-                  onChange={(e) => setEmailInput(e.target.value)}
-                  placeholder="Enter admin email address"
-                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
-                  disabled={!settings.enabled}
-                />
-                <button
-                  type="button"
-                  onClick={handleAddEmail}
-                  className="ml-2 inline-flex items-center rounded-md border border-transparent bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
-                  disabled={!settings.enabled || !emailInput.trim()}
-                >
-                  Add
-                </button>
-              </div>
-              
-              <div className="mt-2">
-                {settings.adminEmails.length === 0 ? (
-                  <p className="text-sm text-gray-500 italic">No administrator emails added yet.</p>
-                ) : (
-                  <ul className="divide-y divide-gray-200 border rounded-md">
-                    {settings.adminEmails.map((email) => (
-                      <li key={email} className="flex items-center justify-between py-2 px-3">
-                        <span className="text-sm text-gray-800">{email}</span>
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveEmail(email)}
-                          className="text-red-600 hover:text-red-800"
-                          disabled={!settings.enabled}
-                        >
-                          Remove
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            </div>
-          )}
-          
+
           {/* Threshold Settings */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label htmlFor="overdue-threshold" className="block text-sm font-medium text-gray-700">
-                Overdue Threshold (days)
-              </label>
-              <input
-                type="number"
-                id="overdue-threshold"
-                min="0"
-                max="30"
-                value={settings.overdueThreshold}
-                onChange={(e) => setSettings({ ...settings, overdueThreshold: parseInt(e.target.value) || 0 })}
-                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
-                disabled={!settings.enabled}
-              />
-              <p className="mt-1 text-sm text-gray-500">
-                Days after the due date to consider a protocol overdue for notifications.
-              </p>
-            </div>
-            
+          <div className="max-w-md">
             <div>
               <label htmlFor="due-soon-threshold" className="block text-sm font-medium text-gray-700">
                 Due Soon Threshold (days)
@@ -338,7 +241,7 @@ export default function NotificationsSettingsPage() {
           {settings.lastRun && (
             <div className="mt-2 p-3 bg-gray-50 rounded-md border border-gray-200">
               <p className="text-sm text-gray-600">
-                <span className="font-medium">Last notification sent:</span>{' '}
+                <span className="font-medium">Last reminder check:</span>{' '}
                 {new Date(settings.lastRun).toLocaleString()}
               </p>
             </div>
@@ -370,4 +273,4 @@ export default function NotificationsSettingsPage() {
 
     </div>
   );
-} 
+}

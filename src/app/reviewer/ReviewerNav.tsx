@@ -3,8 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import NoticeAlert from '@/components/NoticeAlert';
-import { BsFillBellFill } from "react-icons/bs";
+import { BsFillBellFill } from 'react-icons/bs';
 
 export default function ReviewerNav() {
   const pathname = usePathname();
@@ -59,10 +58,9 @@ export default function ReviewerNav() {
           </div>
           <div className="hidden sm:flex items-center space-x-4">
 
-            <NoticeAlert userType="reviewer" />
-            {/* <Link href="/reviewer/notices">
+            <Link href="/reviewer/notices" aria-label="Open notices">
               <BsFillBellFill className="text-green-700 hover:text-primary-500" />
-              </Link> */}
+            </Link>
             {reviewerName && (
               <span className="text-sm text-gray-700">Welcome, {reviewerName}</span>
             )}
@@ -151,4 +149,4 @@ export default function ReviewerNav() {
       </div>
     </nav>
   );
-} 
+}

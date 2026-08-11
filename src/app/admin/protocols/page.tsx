@@ -2,18 +2,12 @@
 
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
-import { collectionGroup, getDocs, query } from 'firebase/firestore';
-import { db } from '@/lib/firebaseconfig';
 import ProtocolStatusCard from '@/components/ProtocolStatusCard';
 import {
-  WEEK_IDS,
-  buildNotificationProtocols,
   formatMonthLabel,
-  getProtocolPathParts,
   getProtocolStatusCounts,
   getReviewerTotals,
   groupProtocolsByMonth,
-  normalizeProtocolData,
   type MonthGroup,
   type Protocol,
   type WeekGroup,
@@ -88,24 +82,14 @@ export default function ProtocolsPage() {
       setLoading(true);
       setError(null);
 
-      const fetchedProtocols: Protocol[] = [];
+      const response = await fetch('/api/admin/protocols', { cache: 'no-store' });
+      const result = await response.json();
 
-      for (const weekId of WEEK_IDS) {
-        const protocolsGroupQuery = query(collectionGroup(db, weekId));
-        const protocolsGroupSnapshot = await getDocs(protocolsGroupQuery);
-
-        for (const protocolDoc of protocolsGroupSnapshot.docs) {
-          const pathParts = getProtocolPathParts(protocolDoc.ref.path);
-
-          if (!pathParts) {
-            continue;
-          }
-
-          fetchedProtocols.push(
-            normalizeProtocolData(protocolDoc.id, protocolDoc.data(), pathParts.monthId, pathParts.weekId)
-          );
-        }
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to load protocols.');
       }
+
+      const fetchedProtocols = result.protocols as Protocol[];
 
       setProtocols(fetchedProtocols);
       const firstMonth = groupProtocolsByMonth(fetchedProtocols)[0]?.monthId;
@@ -198,7 +182,6 @@ export default function ProtocolsPage() {
           scope,
           monthDocumentId: month.monthId,
           weekId: week?.weekId,
-          protocols: buildNotificationProtocols(selectedProtocols),
         }),
       });
       const result = await response.json();

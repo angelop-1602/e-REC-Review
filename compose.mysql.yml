@@ -1,0 +1,31 @@
+services:
+  mysql:
+    image: mysql:8.4.11
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD in .env.local}"
+      MYSQL_DATABASE: "${MYSQL_DATABASE:-erec_review}"
+      MYSQL_USER: "${MYSQL_USER:-erec_app}"
+      MYSQL_PASSWORD: "${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env.local}"
+      TZ: UTC
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+      - --default-time-zone=+00:00
+    ports:
+      - "127.0.0.1:${MYSQL_PORT:-3306}:3306"
+    volumes:
+      - erec_mysql_data:/var/lib/mysql
+      - ./backups/mysql:/backups
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'MYSQL_PWD="$${MYSQL_ROOT_PASSWORD}" mysqladmin ping --host=127.0.0.1 --user=root --silent'
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    stop_grace_period: 1m
+
+volumes:
+  erec_mysql_data:

@@ -2,20 +2,16 @@
 
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { type FormEvent, useEffect, useMemo, useState } from 'react';
-import { collection, deleteDoc, doc, getDoc, getDocs, orderBy, query, setDoc, Timestamp } from 'firebase/firestore';
-import { db } from '@/lib/firebaseconfig';
+import { type FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import ProtocolTable from '@/components/ProtocolTable';
 import ProtocolDetailsModal from '@/components/ProtocolDetailsModal';
 import ProtocolStatusCard from '@/components/ProtocolStatusCard';
 import ReassignmentModal from '@/components/ReassignmentModal';
 import {
-  buildNotificationProtocols,
   formatMonthLabel,
   formatWeekLabel,
   getProtocolStatusCounts,
   getReviewerTotals,
-  normalizeProtocolData,
   sortProtocols,
   type Protocol,
   type Reviewer,
@@ -133,16 +129,15 @@ export default function ProtocolWeekPage() {
   const [deleteTarget, setDeleteTarget] = useState<Protocol | null>(null);
   const [deleteSubmitting, setDeleteSubmitting] = useState(false);
 
-  const fetchWeekProtocols = async () => {
+  const fetchWeekProtocols = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
 
-      const protocolsRef = collection(db, 'protocols', monthId, weekId);
-      const protocolsSnapshot = await getDocs(protocolsRef);
-      const nextProtocols = protocolsSnapshot.docs.map((protocolDoc) =>
-        normalizeProtocolData(protocolDoc.id, protocolDoc.data(), monthId, weekId)
-      );
+      const response = await fetch(`/api/admin/protocols?monthId=${encodeURIComponent(monthId)}&weekId=${encodeURIComponent(weekId)}`, { cache: 'no-store' });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Failed to load protocols.');
+      const nextProtocols = result.protocols as Protocol[];
 
       setProtocols(sortProtocols(nextProtocols));
     } catch (fetchError) {
@@ -151,15 +146,15 @@ export default function ProtocolWeekPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [monthId, weekId]);
 
-  const fetchReviewers = async () => {
+  const fetchReviewers = useCallback(async () => {
     try {
-      const reviewersQuery = query(collection(db, 'reviewers'), orderBy('name'));
-      const reviewersSnapshot = await getDocs(reviewersQuery);
-      const nextReviewers = reviewersSnapshot.docs.map((reviewerDoc) => ({
-        id: reviewerDoc.id,
-        name: typeof reviewerDoc.data().name === 'string' ? reviewerDoc.data().name : reviewerDoc.id,
+      const response = await fetch('/api/admin/reviewers', { cache: 'no-store' });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Failed to load reviewers.');
+      const nextReviewers = result.reviewers.map((reviewer: Reviewer) => ({
+        ...reviewer,
         status: 'In Progress',
       }));
 
@@ -167,12 +162,12 @@ export default function ProtocolWeekPage() {
     } catch (reviewerError) {
       console.error('Error fetching reviewers:', reviewerError);
     }
-  };
+  }, []);
 
   useEffect(() => {
     fetchWeekProtocols();
     fetchReviewers();
-  }, [monthId, weekId]);
+  }, [fetchReviewers, fetchWeekProtocols]);
 
   const filteredProtocols = useMemo(() => {
     const normalizedSearch = searchTerm.trim().toLowerCase();
@@ -212,8 +207,6 @@ export default function ProtocolWeekPage() {
     setReassignmentData({ protocol, reviewerId, reviewerName });
     setReassignModalOpen(true);
   };
-
-  const getProtocolDocumentRef = (protocolId: string) => doc(db, 'protocols', monthId, weekId, protocolId);
 
   const openCreateProtocol = () => {
     setProtocolFormMode('create');
@@ -294,7 +287,7 @@ export default function ProtocolWeekPage() {
         }
 
         if (field === 'status') {
-          nextReviewer.completed_at = value === 'Completed' ? reviewer.completed_at || Timestamp.now() : undefined;
+          nextReviewer.completed_at = value === 'Completed' ? reviewer.completed_at || new Date().toISOString() : undefined;
           nextReviewer.due_date = value === 'Completed' ? '' : reviewer.due_date || currentForm.due_date;
         }
 
@@ -332,7 +325,7 @@ export default function ProtocolWeekPage() {
         form_type: reviewer.form_type || FORM_TYPE_OPTIONS[0],
         status: reviewer.status,
         due_date: reviewer.status === 'Completed' ? '' : reviewer.due_date,
-        completed_at: reviewer.status === 'Completed' ? reviewer.completed_at || Timestamp.now() : null,
+        completed_at: reviewer.status === 'Completed' ? reviewer.completed_at || new Date().toISOString() : null,
       }));
 
     return {
@@ -394,24 +387,17 @@ export default function ProtocolWeekPage() {
     setFormError(null);
 
     try {
-      const protocolId = protocolFormMode === 'create' ? spupRecCode : editingProtocol?.id;
-
-      if (!protocolId) {
-        throw new Error('Protocol document could not be identified.');
-      }
-
-      const protocolRef = getProtocolDocumentRef(protocolId);
-
-      if (protocolFormMode === 'create') {
-        const existingProtocol = await getDoc(protocolRef);
-
-        if (existingProtocol.exists()) {
-          setFormError('A protocol document with this REC code already exists for this week.');
-          return;
-        }
-      }
-
-      await setDoc(protocolRef, buildProtocolPayload(), { merge: protocolFormMode === 'edit' });
+      const internalId = editingProtocol?.protocolKey || editingProtocol?.internalId;
+      const endpoint = protocolFormMode === 'edit' && internalId
+        ? `/api/admin/protocols/${encodeURIComponent(internalId)}`
+        : '/api/admin/protocols';
+      const response = await fetch(endpoint, {
+        method: protocolFormMode === 'edit' ? 'PATCH' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ monthId, weekId, protocol: buildProtocolPayload() }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Failed to save protocol.');
       await fetchWeekProtocols();
 
       setNotice({
@@ -436,7 +422,11 @@ export default function ProtocolWeekPage() {
     setDeleteSubmitting(true);
 
     try {
-      await deleteDoc(getProtocolDocumentRef(deleteTarget.id));
+      const internalId = deleteTarget.protocolKey || deleteTarget.internalId;
+      if (!internalId) throw new Error('Protocol identifier is missing.');
+      const response = await fetch(`/api/admin/protocols/${encodeURIComponent(internalId)}`, { method: 'DELETE' });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Failed to delete protocol.');
       await fetchWeekProtocols();
 
       if (selectedProtocol?.id === deleteTarget.id) {
@@ -476,7 +466,6 @@ export default function ProtocolWeekPage() {
           scope: 'week',
           monthDocumentId: monthId,
           weekId,
-          protocols: buildNotificationProtocols(protocols),
         }),
       });
       const result = await response.json();
@@ -922,7 +911,6 @@ export default function ProtocolWeekPage() {
         protocol={selectedProtocol}
         onClose={() => setDetailsModalOpen(false)}
         onReassign={(protocol, reviewerId, reviewerName) => handleReassign(protocol as Protocol, reviewerId, reviewerName)}
-        reviewerList={reviewerList}
       />
 
       {reassignmentData && currentReviewer && (

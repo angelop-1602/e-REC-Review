@@ -1,20 +1,18 @@
 // Final integrated code below will:
 // 1. Use parsed reviewer ID to fetch their name from `/reviewers/{id}`
 // 2. Process the data BEFORE upload
-// 3. Show a Firestore structure preview
+// 3. Show a database structure preview
 // 4. Preserve file upload + paste into table behavior with editable cell
 
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { setDoc, doc, collection, getDoc } from 'firebase/firestore';
-import { db } from '@/lib/firebaseconfig';
-import Papa from 'papaparse';
-
-const headers = [
-  'SPUP REC Code', 'Principal Investigator', 'Research Title', 'Adviser', 'Course/Program',
-  'E Link', 'PRA1', 'PRA2', 'ICA', 'IACUC', 'IACUC2', 'CREF1', 'CREF2'
-];
+import {
+  PRINCIPAL_INVESTIGATOR_HEADER,
+  PROTOCOL_UPLOAD_REVIEWER_COLUMNS,
+  PROTOCOL_UPLOAD_USED_HEADERS,
+  ProtocolUploadRow,
+} from '@/lib/protocolCsvColumns';
 
 const monthOptions = [
   'January',
@@ -31,7 +29,6 @@ const monthOptions = [
   'December',
 ];
 
-type CSVRow = { [key: string]: string };
 type Reviewer = { id: string; name: string; form_type: string; status: string; due_date: string };
 type Protocol = {
   spup_rec_code: string;
@@ -71,7 +68,7 @@ export default function CSVUploader() {
   const currentYear = new Date().getFullYear();
   const yearOptions = [currentYear - 1, currentYear, currentYear + 1];
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [rows, setRows] = useState<CSVRow[]>([]);
+  const [rows, setRows] = useState<ProtocolUploadRow[]>([]);
   const [processedData, setProcessedData] = useState<Protocol[]>([]);
   const [uploadStatus, setUploadStatus] = useState('');
   const [loading, setLoading] = useState(false);
@@ -97,14 +94,15 @@ export default function CSVUploader() {
 
   const fetchReviewerName = async (id: string): Promise<string> => {
     if (reviewerCache.has(id)) return reviewerCache.get(id)!;
-    const snap = await getDoc(doc(db, 'reviewers', id));
-    const name = snap.exists() ? snap.data().name || id : id;
-    if (!snap.exists()) console.warn(`Reviewer not found for ID: ${id}`);
+    const response = await fetch(`/api/admin/reviewers/${encodeURIComponent(id)}`, { cache: 'no-store' });
+    const result = await response.json();
+    const name = response.ok ? result.reviewer?.name || id : id;
+    if (!response.ok) console.warn(`Reviewer not found for ID: ${id}`);
     reviewerCache.set(id, name);
     return name;
   };
 
-  const processData = async (data: CSVRow[]) => {
+  const processData = async (data: ProtocolUploadRow[]) => {
     const processed: Protocol[] = [];
 
     for (const row of data) {
@@ -112,17 +110,17 @@ export default function CSVUploader() {
 
       const currentDueDate = dueDate;
       const reviewers: Reviewer[] = [];
-      for (const header of headers.slice(6)) {
+      for (const { header, formType } of PROTOCOL_UPLOAD_REVIEWER_COLUMNS) {
         const reviewerCode = row[header]?.trim();
         if (reviewerCode) {
           const name = await fetchReviewerName(reviewerCode);
-          reviewers.push({ id: reviewerCode, name, form_type: header, status: 'In Progress', due_date: currentDueDate });
+          reviewers.push({ id: reviewerCode, name, form_type: formType, status: 'In Progress', due_date: currentDueDate });
         }
       }
 
       processed.push({
         spup_rec_code: row['SPUP REC Code'],
-        principal_investigator: row['Principal Investigator'] || '',
+        principal_investigator: row[PRINCIPAL_INVESTIGATOR_HEADER] || '',
         research_title: row['Research Title'] || '',
         adviser: row['Adviser'] || '',
         course_program: row['Course/Program'] || '',
@@ -132,49 +130,74 @@ export default function CSVUploader() {
       });
     }
     setProcessedData(processed);
+    return processed.length;
+  };
+
+  const processSpreadsheetText = async (text: string, sourceLabel: 'Paste' | 'File') => {
+    const response = await fetch('/api/admin/csv-upload/parse', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    const result = await response.json();
+
+    if (!response.ok) {
+      setRows([]);
+      setProcessedData([]);
+      throw new Error(result.error || `${sourceLabel} could not be processed.`);
+    }
+
+    const parsed = Array.isArray(result.rows) ? result.rows as ProtocolUploadRow[] : [];
+    setRows(parsed);
+    const protocolCount = await processData(parsed);
+    const ignoredCount = Array.isArray(result.ignoredHeaders) ? result.ignoredHeaders.length : 0;
+    setUploadStatus(
+      `Prepared ${protocolCount} protocol${protocolCount === 1 ? '' : 's'} from ${sourceLabel.toLowerCase()}.`
+      + (result.sourceHadHeader ? ` Removed ${ignoredCount} unused column header${ignoredCount === 1 ? '' : 's'}.` : ' Used the standard 23-column layout because no header row was detected.')
+    );
   };
 
   const handlePaste = async (e: React.ClipboardEvent<HTMLDivElement>) => {
+    e.preventDefault();
     setUploadStatus('');
-    const pasted = e.clipboardData.getData('text/plain');
-    const lines = pasted.trim().split(/\r?\n/);
-    const parsed: CSVRow[] = lines.map(line => {
-      const values = line.split('\t');
-      const obj: CSVRow = {};
-      headers.forEach((h, i) => (obj[h] = values[i] || ''));
-      return obj;
-    });
-    setRows(parsed);
-    await processData(parsed);
+    try {
+      await processSpreadsheetText(e.clipboardData.getData('text/plain'), 'Paste');
+    } catch (error) {
+      setUploadStatus(error instanceof Error ? error.message : 'Paste could not be processed.');
+    }
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     setUploadStatus('');
     const file = e.target.files?.[0];
     if (!file) return;
-    Papa.parse<CSVRow>(file, {
-      header: true,
-      skipEmptyLines: true,
-      complete: async (result) => {
-        setRows(result.data);
-        await processData(result.data);
-      }
-    });
+    try {
+      await processSpreadsheetText(await file.text(), 'File');
+    } catch (error) {
+      setUploadStatus(error instanceof Error ? error.message : 'File could not be processed.');
+    }
   };
 
-  const uploadToFirestore = async () => {
+  const uploadToMysql = async () => {
     if (!processedData.length) return;
     setUploadStatus('Uploading...');
     setLoading(true);
     try {
       const monthDocumentId = `${selectedMonth}${selectedYear}`;
-      const baseRef = doc(collection(db, 'protocols'), monthDocumentId);
-      const weekRef = collection(baseRef, selectedWeek);
       const uploadedCount = processedData.length;
-      const uploadedProtocols = processedData;
       for (const protocol of processedData) {
-        const docRef = doc(weekRef, protocol.spup_rec_code);
-        await setDoc(docRef, protocol);
+        const response = await fetch('/api/admin/protocols', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            monthId: monthDocumentId,
+            weekId: selectedWeek,
+            protocol,
+            upsert: true,
+          }),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || `Failed to upload ${protocol.spup_rec_code}.`);
       }
       let notificationMessage = '';
 
@@ -189,7 +212,6 @@ export default function CSVUploader() {
             body: JSON.stringify({
               monthDocumentId,
               weekId: selectedWeek,
-              protocols: uploadedProtocols,
             }),
           });
           const notificationResult = await response.json();
@@ -261,7 +283,9 @@ export default function CSVUploader() {
       <div className="mb-4">
         <label className="block text-sm font-medium text-gray-700 mb-1">Upload CSV File</label>
         <input className="border rounded-md p-2 w-full focus:ring-blue-500 focus:border-blue-500" type="file" onChange={handleFileChange} ref={fileInputRef} />
-        <p className="mt-2 text-xs text-gray-500">Or paste Excel data directly into the table below (tab-separated, with headers matching: {headers.join(', ')})</p>
+        <p className="mt-2 text-xs text-gray-500">
+          Paste either the complete Excel table with its header, or data rows only in the standard 23-column order. Only these columns are used: {PROTOCOL_UPLOAD_USED_HEADERS.join(', ')}. Other columns are removed on the server.
+        </p>
       </div>
 
       <div className="mb-4 flex items-start gap-2">
@@ -281,13 +305,13 @@ export default function CSVUploader() {
         <table className="min-w-full text-xs">
           <thead className="sticky top-0 z-10">
             <tr>
-              {headers.map(h => <th key={h} className="border p-2 bg-blue-50 text-blue-800 font-semibold whitespace-nowrap">{h}</th>)}
+              {PROTOCOL_UPLOAD_USED_HEADERS.map(h => <th key={h} className="border p-2 bg-blue-50 text-blue-800 font-semibold whitespace-nowrap">{h}</th>)}
             </tr>
           </thead>
           <tbody>
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={headers.length} className="text-center py-8 text-gray-400">
+                <td colSpan={PROTOCOL_UPLOAD_USED_HEADERS.length} className="text-center py-8 text-gray-400">
                   <div
                     contentEditable
                     suppressContentEditableWarning
@@ -295,14 +319,14 @@ export default function CSVUploader() {
                     className="outline-none border-2 border-dashed border-blue-300 bg-blue-50 rounded-md p-6 text-gray-500 hover:bg-blue-100 focus:bg-blue-100 transition-all duration-150 cursor-text"
                     style={{ minHeight: 60 }}
                   >
-                    Paste Excel data here (Tab-separated)
+                    Paste the Excel table here, with or without its header row
                   </div>
                 </td>
               </tr>
             ) : (
               rows.map((r, i) => (
                 <tr key={i} className={i % 2 === 0 ? 'bg-gray-50' : 'bg-white'}>
-                  {headers.map(h => <td key={h} className="border p-2 whitespace-nowrap">{r[h]}</td>)}
+                  {PROTOCOL_UPLOAD_USED_HEADERS.map(h => <td key={h} className="border p-2 whitespace-nowrap">{r[h]}</td>)}
                 </tr>
               ))
             )}
@@ -310,8 +334,8 @@ export default function CSVUploader() {
         </table>
       </div>
 
-      <button onClick={uploadToFirestore} className="mt-4 bg-blue-600 text-white px-6 py-2 rounded-md shadow hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-all duration-150 disabled:opacity-50" disabled={loading || !processedData.length}>
-        {loading ? 'Uploading...' : 'Upload to Firestore'}
+      <button onClick={uploadToMysql} className="mt-4 bg-blue-600 text-white px-6 py-2 rounded-md shadow hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-all duration-150 disabled:opacity-50" disabled={loading || !processedData.length}>
+        {loading ? 'Uploading...' : 'Upload to MySQL'}
       </button>
 
       {uploadStatus && <p className="mt-2 text-sm text-blue-700 font-medium">{uploadStatus}</p>}

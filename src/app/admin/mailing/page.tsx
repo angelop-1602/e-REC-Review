@@ -2,8 +2,6 @@
 
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
-import { collection, doc, getDocs, limit, onSnapshot, orderBy, query, where, writeBatch } from 'firebase/firestore';
-import { db } from '@/lib/firebaseconfig';
 
 type MailStatus = 'pending' | 'sending' | 'sent' | 'failed' | 'skipped' | 'completed' | 'completed_with_errors';
 
@@ -113,10 +111,6 @@ function getBatchProgress(batch: MailBatch): number {
   return Math.round(((batch.sent + batch.skipped + batch.failed) / batch.total) * 100);
 }
 
-function normalizeCount(value: unknown): number {
-  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
-}
-
 export default function MailingPage() {
   const [batches, setBatches] = useState<MailBatch[]>([]);
   const [logs, setLogs] = useState<MailLog[]>([]);
@@ -126,75 +120,31 @@ export default function MailingPage() {
   const [clearingBatchId, setClearingBatchId] = useState<string | null>(null);
 
   useEffect(() => {
-    const batchQuery = query(collection(db, 'mail_batches'), orderBy('createdAt', 'desc'), limit(30));
-    const logQuery = query(collection(db, 'mail_logs'), orderBy('createdAt', 'desc'), limit(150));
-
-    const unsubscribeBatches = onSnapshot(
-      batchQuery,
-      (snapshot) => {
-        setBatches(snapshot.docs.map((mailDoc) => {
-          const data = mailDoc.data();
-
-          return {
-            id: mailDoc.id,
-            status: typeof data.status === 'string' ? data.status : 'pending',
-            periodLabel: typeof data.periodLabel === 'string' ? data.periodLabel : 'N/A',
-            scope: typeof data.scope === 'string' ? data.scope : 'week',
-            total: normalizeCount(data.total),
-            pending: normalizeCount(data.pending),
-            sending: normalizeCount(data.sending),
-            sent: normalizeCount(data.sent),
-            skipped: normalizeCount(data.skipped),
-            failed: normalizeCount(data.failed),
-            protocolCount: normalizeCount(data.protocolCount),
-            reviewerCount: normalizeCount(data.reviewerCount),
-            createdAt: data.createdAt,
-            updatedAt: data.updatedAt,
-            completedAt: data.completedAt,
-            lastError: typeof data.lastError === 'string' ? data.lastError : '',
-          };
-        }));
-        setLoading(false);
-      },
-      (snapshotError) => {
-        console.error('Failed to load mail batches:', snapshotError);
-        setError('Failed to load mailing batches.');
-        setLoading(false);
+    let active = true;
+    const loadHistory = async () => {
+      try {
+        const response = await fetch('/api/admin/mail-history', { cache: 'no-store' });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Failed to load mailing history.');
+        if (active) {
+          setBatches(result.batches as MailBatch[]);
+          setLogs(result.logs as MailLog[]);
+          setError(null);
+          setLoading(false);
+        }
+      } catch (historyError) {
+        console.error('Failed to load mail history:', historyError);
+        if (active) {
+          setError('Failed to load mailing history.');
+          setLoading(false);
+        }
       }
-    );
-
-    const unsubscribeLogs = onSnapshot(
-      logQuery,
-      (snapshot) => {
-        setLogs(snapshot.docs.map((mailDoc) => {
-          const data = mailDoc.data();
-
-          return {
-            id: mailDoc.id,
-            batchId: typeof data.batchId === 'string' ? data.batchId : '',
-            status: typeof data.status === 'string' ? data.status : 'pending',
-            periodLabel: typeof data.periodLabel === 'string' ? data.periodLabel : 'N/A',
-            reviewerName: typeof data.reviewerName === 'string' ? data.reviewerName : 'Reviewer',
-            email: typeof data.email === 'string' ? data.email : '',
-            protocolCount: normalizeCount(data.protocolCount),
-            attempts: normalizeCount(data.attempts),
-            maxAttempts: normalizeCount(data.maxAttempts),
-            reason: typeof data.reason === 'string' ? data.reason : '',
-            lastError: typeof data.lastError === 'string' ? data.lastError : '',
-            createdAt: data.createdAt,
-            updatedAt: data.updatedAt,
-          };
-        }));
-      },
-      (snapshotError) => {
-        console.error('Failed to load mail logs:', snapshotError);
-        setError('Failed to load mailing logs.');
-      }
-    );
-
+    };
+    loadHistory();
+    const interval = window.setInterval(loadHistory, 5000);
     return () => {
-      unsubscribeBatches();
-      unsubscribeLogs();
+      active = false;
+      window.clearInterval(interval);
     };
   }, []);
 
@@ -227,37 +177,16 @@ export default function MailingPage() {
     setClearNotice(null);
 
     try {
-      let deletedAttemptCount = 0;
-
-      while (true) {
-        const snapshot = await getDocs(query(
-          collection(db, 'mail_logs'),
-          where('batchId', '==', batchToClear.id),
-          limit(500)
-        ));
-
-        if (snapshot.empty) {
-          break;
-        }
-
-        const batch = writeBatch(db);
-        snapshot.docs.forEach((mailDoc) => {
-          batch.delete(mailDoc.ref);
-        });
-        await batch.commit();
-
-        deletedAttemptCount += snapshot.size;
-
-        if (snapshot.size < 500) {
-          break;
-        }
-      }
-
-      const batchDelete = writeBatch(db);
-      batchDelete.delete(doc(db, 'mail_batches', batchToClear.id));
-      await batchDelete.commit();
-
-      setClearNotice(`Cleared ${batchToClear.periodLabel} and ${deletedAttemptCount} related email attempt${deletedAttemptCount === 1 ? '' : 's'}.`);
+      const response = await fetch('/api/admin/mail-history', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ batchId: batchToClear.id }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Failed to archive mail batch.');
+      setBatches((current) => current.filter((batch) => batch.id !== batchToClear.id));
+      setLogs((current) => current.filter((log) => log.batchId !== batchToClear.id));
+      setClearNotice(`Archived ${batchToClear.periodLabel} and its related email attempts.`);
     } catch (clearError) {
       console.error('Failed to clear mail batch:', clearError);
       setError('Failed to clear the selected mail batch.');

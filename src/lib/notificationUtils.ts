@@ -1,8 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /* eslint-disable @typescript-eslint/no-unused-vars */
 import { getFormTypeName } from '@/lib/utils';
-import { doc, collection, getDocs, query, where, addDoc, getDoc, updateDoc } from 'firebase/firestore';
-import { db } from '@/lib/firebaseconfig';
 import { isOverdue, isDueSoon } from './utils';
 
 /**
@@ -288,4 +286,4 @@ export const sendOverdueProtocolNotifications = async (adminEmails: string[], ov
   } catch (error) {
     console.error('Error checking overdue protocols:', error);
   }
-} 
+}

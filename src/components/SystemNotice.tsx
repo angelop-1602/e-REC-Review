@@ -1,6 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import { collection, getDocs, query, where, orderBy, Timestamp } from 'firebase/firestore';
-import { db } from '@/lib/firebaseconfig';
 import { COLORS, STYLES } from '@/lib/colors';
 
 interface SystemNotice {
@@ -14,8 +12,8 @@ interface SystemNotice {
     href: string;
   };
   noticeNumber: number;
-  created_at: Timestamp;
-  expires_at: Timestamp;
+  created_at: string | null;
+  expires_at: string | null;
 }
 
 export default function SystemNotice() {
@@ -27,25 +25,10 @@ export default function SystemNotice() {
     const fetchSystemNotices = async () => {
       try {
         setLoading(true);
-        const currentDate = new Date();
-        
-        const noticesQuery = query(
-          collection(db, 'system_notices'),
-          where('expires_at', '>', Timestamp.fromDate(currentDate)),
-          orderBy('expires_at', 'asc')
-        );
-
-        const querySnapshot = await getDocs(noticesQuery);
-        const fetchedNotices: SystemNotice[] = [];
-        
-        querySnapshot.forEach((doc) => {
-          fetchedNotices.push({
-            id: doc.id,
-            ...doc.data()
-          } as SystemNotice);
-        });
-
-        setNotices(fetchedNotices);
+        const response = await fetch('/api/system-notices');
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || 'Failed to load system notices');
+        setNotices(payload.notices as SystemNotice[]);
       } catch (err) {
         console.error('Error fetching system notices:', err);
         setError('Failed to load system notices');
@@ -171,4 +154,4 @@ export default function SystemNotice() {
       ))}
     </div>
   );
-} 
+}

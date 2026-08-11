@@ -1,24 +1,22 @@
 'use client';
 
+import Link from 'next/link';
 import { useState, useEffect, useMemo } from 'react';
-import { collection, collectionGroup, getDocs, doc, deleteDoc, updateDoc, query, orderBy, setDoc, deleteField } from 'firebase/firestore';
-import { db } from '@/lib/firebaseconfig';
 import {
-  WEEK_IDS,
   buildNotificationProtocols,
   getMonthSortValue,
-  getProtocolPathParts,
   groupProtocolsByMonth,
-  normalizeProtocolData,
   type MonthGroup,
   type Protocol,
 } from '@/lib/protocols';
+import {
+  getProtocolsForReviewer,
+  getReviewerAssignmentStats,
+  isReviewerAssignmentMatch,
+  type ReviewerRecord,
+} from '@/lib/reviewerProfiles';
 
-interface Reviewer {
-  id: string;
-  name: string;
-  email?: string;
-}
+type Reviewer = ReviewerRecord;
 
 type MailScope = 'month' | 'week';
 
@@ -30,6 +28,15 @@ interface SendSummary {
 
 function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, init);
+  const payload = await response.json();
+  if (!response.ok) {
+    throw new Error(payload.error || 'The request failed.');
+  }
+  return payload as T;
 }
 
 function formatNotificationSummary(summary: SendSummary): string {
@@ -48,32 +55,6 @@ function formatNotificationSummary(summary: SendSummary): string {
   }
 
   return parts.length > 0 ? parts.join(', ') : 'no email was sent';
-}
-
-function normalizeMatchValue(value: unknown): string {
-  return typeof value === 'string' ? value.trim().toLowerCase() : '';
-}
-
-function isReviewerAssignmentMatch(
-  assignment: { id?: string; name?: string },
-  reviewer: Reviewer
-): boolean {
-  const assignmentValues = [
-    normalizeMatchValue(assignment.id),
-    normalizeMatchValue(assignment.name),
-  ].filter(Boolean);
-  const reviewerValues = [
-    normalizeMatchValue(reviewer.id),
-    normalizeMatchValue(reviewer.name),
-  ].filter(Boolean);
-
-  return assignmentValues.some((value) => reviewerValues.includes(value));
-}
-
-function getProtocolsForReviewer(protocols: Protocol[], reviewer: Reviewer): Protocol[] {
-  return protocols.filter((protocol) =>
-    (protocol.reviewers || []).some((assignment) => isReviewerAssignmentMatch(assignment, reviewer))
-  );
 }
 
 function getCurrentMonthSortValue(): number {
@@ -169,18 +150,7 @@ export default function ReviewersPage() {
   const fetchReviewers = async () => {
     try {
       setLoading(true);
-      const reviewersRef = collection(db, 'reviewers');
-      const q = query(reviewersRef, orderBy('name'));
-      const querySnapshot = await getDocs(q);
-      
-      const reviewersList: Reviewer[] = [];
-      querySnapshot.forEach((doc) => {
-        reviewersList.push({ 
-          id: doc.id, 
-          name: doc.data().name || doc.id,
-          email: typeof doc.data().email === 'string' ? doc.data().email : '',
-        });
-      });
+      const { reviewers: reviewersList } = await requestJson<{ reviewers: Reviewer[] }>('/api/admin/reviewers');
       
       setReviewers(reviewersList);
       setError(null);
@@ -197,24 +167,9 @@ export default function ReviewersPage() {
       setProtocolLoading(true);
       setProtocolError(null);
 
-      const fetchedProtocols: Protocol[] = [];
-
-      for (const weekId of WEEK_IDS) {
-        const protocolsGroupQuery = query(collectionGroup(db, weekId));
-        const protocolsGroupSnapshot = await getDocs(protocolsGroupQuery);
-
-        for (const protocolDoc of protocolsGroupSnapshot.docs) {
-          const pathParts = getProtocolPathParts(protocolDoc.ref.path);
-
-          if (!pathParts) {
-            continue;
-          }
-
-          fetchedProtocols.push(
-            normalizeProtocolData(protocolDoc.id, protocolDoc.data(), pathParts.monthId, pathParts.weekId)
-          );
-        }
-      }
+      const { protocols: fetchedProtocols } = await requestJson<{ protocols: Protocol[] }>(
+        '/api/admin/reviewers/protocol-periods'
+      );
 
       const monthGroups = groupProtocolsByMonth(fetchedProtocols);
       const defaultMonthId = getDefaultMailMonthId(monthGroups);
@@ -258,12 +213,15 @@ export default function ReviewersPage() {
         return;
       }
       
-      // Add to Firestore
-      const reviewerRef = doc(collection(db, 'reviewers'), newReviewerId);
-      await setDoc(reviewerRef, {
-        name: newReviewerName,
-        ...(newReviewerEmail.trim() ? { email: newReviewerEmail.trim() } : {}),
-      }, { merge: true });
+      await requestJson('/api/admin/reviewers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: newReviewerId.trim(),
+          name: newReviewerName.trim(),
+          email: newReviewerEmail.trim(),
+        }),
+      });
       
       // Refresh the list
       await fetchReviewers();
@@ -304,11 +262,13 @@ export default function ReviewersPage() {
         return;
       }
       
-      // Update in Firestore
-      const reviewerRef = doc(collection(db, 'reviewers'), selectedReviewer.id);
-      await updateDoc(reviewerRef, {
-        name: newReviewerName,
-        email: newReviewerEmail.trim() ? newReviewerEmail.trim() : deleteField(),
+      await requestJson(`/api/admin/reviewers/${encodeURIComponent(selectedReviewer.id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: newReviewerName.trim(),
+          email: newReviewerEmail.trim(),
+        }),
       });
       
       // Refresh the list
@@ -336,8 +296,9 @@ export default function ReviewersPage() {
     try {
       setIsSubmitting(true);
       
-      // Delete from Firestore
-      await deleteDoc(doc(collection(db, 'reviewers'), confirmDeleteId));
+      await requestJson(`/api/admin/reviewers/${encodeURIComponent(confirmDeleteId)}`, {
+        method: 'DELETE',
+      });
       
       // Refresh the list
       await fetchReviewers();
@@ -346,10 +307,10 @@ export default function ReviewersPage() {
       setConfirmDeleteId('');
       setIsDeleteModalOpen(false);
       
-      showNotification('Reviewer deleted successfully', 'success');
+      showNotification('Reviewer archived successfully', 'success');
     } catch (err) {
       console.error('Error deleting reviewer:', err);
-      showNotification(`Failed to delete reviewer: ${err}`, 'error');
+      showNotification(`Failed to archive reviewer: ${err}`, 'error');
     } finally {
       setIsSubmitting(false);
     }
@@ -406,6 +367,9 @@ export default function ReviewersPage() {
   );
 
   const monthGroups = useMemo(() => groupProtocolsByMonth(protocols), [protocols]);
+  const reviewerStats = useMemo(() => new Map(
+    reviewers.map((reviewer) => [reviewer.id, getReviewerAssignmentStats(protocols, reviewer)])
+  ), [protocols, reviewers]);
   const reviewerMailMonthGroups = useMemo(() => (
     mailReviewer ? groupProtocolsByMonth(getProtocolsForReviewer(protocols, mailReviewer)) : []
   ), [mailReviewer, protocols]);
@@ -625,7 +589,7 @@ export default function ReviewersPage() {
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search by name or ID..."
+            placeholder="Search by name, ID, or email..."
             className="w-full p-2 pl-10 border rounded-md"
           />
           <div className="absolute left-3 top-2.5 text-gray-400">
@@ -651,65 +615,96 @@ export default function ReviewersPage() {
             <p className="text-gray-500">No reviewers found matching your search criteria.</p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {filteredReviewers.map((reviewer) => (
-              <div 
-                key={reviewer.id} 
-                className="p-4 border rounded-lg hover:shadow-md transition-shadow"
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center">
-                    <div className="h-10 w-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-800 font-bold">
-                      {reviewer.name.charAt(0)}
-                    </div>
-                    <div className="ml-3">
-                      <p className="font-medium">{reviewer.name}</p>
-                      <p className="text-xs text-gray-500">{reviewer.id}</p>
-                      <p className="text-xs text-gray-500">{reviewer.email || 'No email'}</p>
-                    </div>
-                  </div>
-                  <div className="flex space-x-2">
-                    <button
-                      type="button"
-                      onClick={() => openMailModal(reviewer)}
-                      disabled={!reviewer.email || protocolLoading || monthGroups.length === 0}
-                      className={`${
-                        reviewer.email && !protocolLoading && monthGroups.length > 0
-                          ? 'text-green-600 hover:text-green-800'
-                          : 'text-gray-300 cursor-not-allowed'
-                      }`}
-                      title={
-                        !reviewer.email
-                          ? 'Reviewer has no email'
-                          : protocolLoading
-                            ? 'Loading periods'
-                            : 'Send review email'
-                      }
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8m-18 8h18a2 2 0 002-2V8a2 2 0 00-2-2H3a2 2 0 00-2 2v6a2 2 0 002 2z" />
-                      </svg>
-                    </button>
-                    <button 
-                      onClick={() => openEditModal(reviewer)}
-                      className="text-blue-500 hover:text-blue-700"
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                      </svg>
-                    </button>
-                    <button 
-                      onClick={() => openDeleteModal(reviewer.id)}
-                      className="text-red-500 hover:text-red-700"
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                      </svg>
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ))}
+          <div className="overflow-x-auto rounded-lg border border-gray-200">
+            <table className="min-w-full divide-y divide-gray-200 text-sm">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-4 py-3 text-left font-semibold text-gray-700">Reviewer</th>
+                  <th className="px-4 py-3 text-left font-semibold text-gray-700">Reviewer ID</th>
+                  <th className="px-4 py-3 text-left font-semibold text-gray-700">Email</th>
+                  <th className="px-4 py-3 text-center font-semibold text-gray-700">Assigned</th>
+                  <th className="px-4 py-3 text-center font-semibold text-gray-700">Completed</th>
+                  <th className="px-4 py-3 text-center font-semibold text-gray-700">Pending</th>
+                  <th className="px-4 py-3 text-right font-semibold text-gray-700">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100 bg-white">
+                {filteredReviewers.map((reviewer) => {
+                  const stats = reviewerStats.get(reviewer.id) ?? {
+                    total: 0,
+                    completed: 0,
+                    pending: 0,
+                    overdue: 0,
+                    dueSoon: 0,
+                  };
+
+                  return (
+                    <tr key={reviewer.id} className="hover:bg-gray-50">
+                      <td className="whitespace-nowrap px-4 py-3">
+                        <div className="flex items-center gap-3">
+                          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-blue-100 font-semibold text-blue-800">
+                            {reviewer.name.charAt(0).toUpperCase()}
+                          </div>
+                          <Link
+                            href={`/admin/reviewers/${encodeURIComponent(reviewer.id)}`}
+                            className="font-medium text-gray-900 hover:text-blue-700"
+                          >
+                            {reviewer.name}
+                          </Link>
+                        </div>
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 font-mono text-xs text-gray-600">{reviewer.id}</td>
+                      <td className="whitespace-nowrap px-4 py-3 text-gray-600">
+                        {reviewer.email || <span className="text-gray-400">No email</span>}
+                      </td>
+                      <td className="px-4 py-3 text-center font-medium text-gray-700">{stats.total}</td>
+                      <td className="px-4 py-3 text-center font-medium text-green-700">{stats.completed}</td>
+                      <td className="px-4 py-3 text-center">
+                        <span className={stats.overdue > 0 ? 'font-semibold text-red-700' : 'font-medium text-amber-700'}>
+                          {stats.pending}
+                        </span>
+                        {stats.overdue > 0 && (
+                          <span className="ml-1 text-xs text-red-600">({stats.overdue} overdue)</span>
+                        )}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 text-right">
+                        <div className="flex items-center justify-end gap-3">
+                          <Link
+                            href={`/admin/reviewers/${encodeURIComponent(reviewer.id)}`}
+                            className="font-medium text-blue-700 hover:text-blue-900"
+                          >
+                            Profile
+                          </Link>
+                          <button
+                            type="button"
+                            onClick={() => openMailModal(reviewer)}
+                            disabled={!reviewer.email || protocolLoading || monthGroups.length === 0}
+                            className="font-medium text-green-700 hover:text-green-900 disabled:cursor-not-allowed disabled:text-gray-300"
+                            title={!reviewer.email ? 'Reviewer has no email' : protocolLoading ? 'Loading periods' : 'Send review email'}
+                          >
+                            Email
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => openEditModal(reviewer)}
+                            className="font-medium text-gray-700 hover:text-gray-950"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => openDeleteModal(reviewer.id)}
+                            className="font-medium text-red-600 hover:text-red-800"
+                          >
+                            Archive
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         )}
       </div>
@@ -1052,13 +1047,13 @@ export default function ReviewersPage() {
         </div>
       )}
       
-      {/* Delete Confirmation Modal */}
+      {/* Archive Confirmation Modal */}
       {isDeleteModalOpen && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-lg shadow-lg p-6 w-full max-w-md">
             <h2 className="text-xl font-semibold mb-2">Confirm Deletion</h2>
             <p className="mb-4 text-gray-600">
-              Are you sure you want to delete this reviewer? This action cannot be undone.
+              Archive this reviewer? They will be hidden from active lists, while assignments and history are retained.
             </p>
             
             <div className="flex justify-end space-x-3">
@@ -1076,7 +1071,7 @@ export default function ReviewersPage() {
                 className="bg-red-500 text-white py-2 px-4 rounded hover:bg-red-600 disabled:opacity-50"
                 disabled={isSubmitting}
               >
-                {isSubmitting ? 'Deleting...' : 'Delete Reviewer'}
+                {isSubmitting ? 'Archiving...' : 'Archive Reviewer'}
               </button>
             </div>
           </div>

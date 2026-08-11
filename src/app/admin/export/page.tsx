@@ -3,8 +3,6 @@
 import { useState, useEffect } from 'react';
 import { exportCollection, downloadAsFile, generateExportFileName } from '@/lib/exportUtils';
 import { COLORS, STYLES } from '@/lib/colors';
-import { collection, getDocs } from 'firebase/firestore';
-import { db } from '@/lib/firebaseconfig';
 
 export default function DataExportPage() {
   const [exportFormat, setExportFormat] = useState<'csv' | 'json'>('csv');
@@ -24,20 +22,20 @@ export default function DataExportPage() {
     fetchMonthFolders();
   }, []);
 
-  // Function to fetch available months from Firestore
+  // Function to fetch available months from MySQL through the application API
   const fetchMonthFolders = async () => {
     setLoadingStructure(true);
     try {
-      // Get all month folders in protocols collection
-      const protocolsRef = collection(db, 'protocols');
-      const monthsSnapshot = await getDocs(protocolsRef);
-      
-      const months: string[] = [];
-      
-      // Get all month folders
-      for (const monthDoc of monthsSnapshot.docs) {
-        months.push(monthDoc.id);
+      const response = await fetch('/api/admin/protocols', { cache: 'no-store' });
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to load protocol months.');
       }
+
+      const months = Array.from(new Set<string>(
+        result.protocols.map((protocol: { monthId: string }) => protocol.monthId)
+      )).sort((left, right) => right.localeCompare(left));
       
       setMonthFolders(months);
       
@@ -205,17 +203,17 @@ export default function DataExportPage() {
           <ol>
             <li>Select a month (or leave blank to export all months)</li>
             <li>Choose your preferred file format (CSV for spreadsheets, JSON for data processing)</li>
-            <li>Click "Export Data" to generate and download the file</li>
+            <li>Click &quot;Export Data&quot; to generate and download the file</li>
           </ol>
           
           <h3>Data Security Notes:</h3>
           <ul>
             <li>Exported data may contain sensitive information - handle with care</li>
             <li>Store exported files securely and delete when no longer needed</li>
-            <li>Follow your organization's data handling policies</li>
+            <li>Follow your organization&apos;s data handling policies</li>
           </ul>
         </div>
       </div>
     </div>
   );
-} 
+}
