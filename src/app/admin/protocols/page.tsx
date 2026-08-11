@@ -8,6 +8,7 @@ import ProtocolStatusCard from '@/components/ProtocolStatusCard';
 import {
   WEEK_IDS,
   buildNotificationProtocols,
+  formatMonthLabel,
   getProtocolPathParts,
   getProtocolStatusCounts,
   getReviewerTotals,
@@ -17,6 +18,7 @@ import {
   type Protocol,
   type WeekGroup,
 } from '@/lib/protocols';
+import { moveProtocolWeek } from '@/lib/protocolWeekTransfer';
 
 type NoticeType = 'success' | 'error' | 'info';
 
@@ -48,6 +50,26 @@ function getWeekHref(monthId: string, weekId: string): string {
   return `/admin/protocols/months/${encodeURIComponent(monthId)}/weeks/${encodeURIComponent(weekId)}`;
 }
 
+function getMonthDocumentId(monthInput: string): string | null {
+  const match = monthInput.match(/^(\d{4})-(\d{2})$/);
+
+  if (!match) {
+    return null;
+  }
+
+  const [, year, rawMonth] = match;
+  const monthIndex = Number(rawMonth) - 1;
+
+  if (monthIndex < 0 || monthIndex > 11) {
+    return null;
+  }
+
+  const monthName = new Intl.DateTimeFormat('en-US', { month: 'long', timeZone: 'UTC' })
+    .format(new Date(Date.UTC(Number(year), monthIndex, 1)));
+
+  return `${monthName}${year}`;
+}
+
 export default function ProtocolsPage() {
   const [protocols, setProtocols] = useState<Protocol[]>([]);
   const [expandedMonths, setExpandedMonths] = useState<string[]>([]);
@@ -56,6 +78,10 @@ export default function ProtocolsPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [sendingKey, setSendingKey] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ type: NoticeType; message: string } | null>(null);
+  const [moveTarget, setMoveTarget] = useState<{ month: MonthGroup; week: WeekGroup } | null>(null);
+  const [moveMonthInput, setMoveMonthInput] = useState('');
+  const [moveError, setMoveError] = useState<string | null>(null);
+  const [moving, setMoving] = useState(false);
 
   const fetchProtocols = async () => {
     try {
@@ -196,6 +222,68 @@ export default function ProtocolsPage() {
     }
   };
 
+  const openMoveWeek = (month: MonthGroup, week: WeekGroup) => {
+    const fullMonth = allMonthGroups.find((group) => group.monthId === month.monthId);
+    const fullWeek = fullMonth?.weeks.find((weekGroup) => weekGroup.weekId === week.weekId);
+
+    setMoveTarget({ month: fullMonth || month, week: fullWeek || week });
+    setMoveMonthInput('');
+    setMoveError(null);
+  };
+
+  const closeMoveWeek = () => {
+    if (moving) {
+      return;
+    }
+
+    setMoveTarget(null);
+    setMoveMonthInput('');
+    setMoveError(null);
+  };
+
+  const handleMoveWeek = async () => {
+    if (!moveTarget) {
+      return;
+    }
+
+    const targetMonthId = getMonthDocumentId(moveMonthInput);
+
+    if (!targetMonthId) {
+      setMoveError('Choose a valid destination month.');
+      return;
+    }
+
+    if (targetMonthId === moveTarget.month.monthId) {
+      setMoveError('Choose a different destination month.');
+      return;
+    }
+
+    setMoving(true);
+    setMoveError(null);
+
+    try {
+      const result = await moveProtocolWeek({
+        sourceMonthId: moveTarget.month.monthId,
+        targetMonthId,
+        weekId: moveTarget.week.weekId,
+      });
+
+      setMoveTarget(null);
+      setMoveMonthInput('');
+      setExpandedMonths((current) => current.includes(targetMonthId) ? current : [...current, targetMonthId]);
+      setNotice({
+        type: 'success',
+        message: `Moved ${result.movedCount} protocol${result.movedCount === 1 ? '' : 's'} from ${moveTarget.month.monthLabel} ${moveTarget.week.weekLabel} to ${formatMonthLabel(targetMonthId)} ${moveTarget.week.weekLabel}.`,
+      });
+      await fetchProtocols();
+    } catch (moveWeekError) {
+      console.error('Failed to move protocol week:', moveWeekError);
+      setMoveError(moveWeekError instanceof Error ? moveWeekError.message : 'Failed to move the week.');
+    } finally {
+      setMoving(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="p-8">
@@ -320,6 +408,13 @@ export default function ProtocolsPage() {
                             </Link>
                             <button
                               type="button"
+                              onClick={() => openMoveWeek(month, week)}
+                              className="px-4 py-2 rounded-md border border-amber-300 text-sm font-medium text-amber-800 hover:bg-amber-50"
+                            >
+                              Move Week
+                            </button>
+                            <button
+                              type="button"
                               onClick={() => sendNotifications('week', month, week)}
                               disabled={sendingKey === weekKey}
                               className="px-4 py-2 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
@@ -335,6 +430,64 @@ export default function ProtocolsPage() {
               </section>
             );
           })}
+        </div>
+      )}
+
+      {moveTarget && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-lg p-6">
+            <h2 className="text-xl font-semibold text-gray-900">Move Week to Another Month</h2>
+            <p className="mt-2 text-sm text-gray-600">
+              Move all {moveTarget.week.protocols.length} protocol{moveTarget.week.protocols.length === 1 ? '' : 's'} in{' '}
+              <strong>{moveTarget.month.monthLabel} {moveTarget.week.weekLabel}</strong>. The week number, protocol details,
+              reviewers, statuses, and due dates will be preserved.
+            </p>
+
+            <div className="mt-5">
+              <label htmlFor="move-week-month" className="block text-sm font-medium text-gray-700 mb-1">
+                Destination month
+              </label>
+              <input
+                id="move-week-month"
+                type="month"
+                value={moveMonthInput}
+                onChange={(event) => {
+                  setMoveMonthInput(event.target.value);
+                  setMoveError(null);
+                }}
+                disabled={moving}
+                className="border border-gray-300 rounded-md w-full p-2 focus:outline-none focus:ring-2 focus:ring-amber-500 disabled:opacity-50"
+              />
+              <p className="mt-2 text-xs text-gray-500">
+                If {moveTarget.week.weekLabel} already exists in that month, these protocols will be added to it. The move stops if a duplicate protocol ID is found.
+              </p>
+            </div>
+
+            {moveError && (
+              <div className="mt-4 rounded-md bg-red-50 px-4 py-3 text-sm text-red-800">
+                {moveError}
+              </div>
+            )}
+
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={closeMoveWeek}
+                disabled={moving}
+                className="px-4 py-2 rounded-md border border-gray-300 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleMoveWeek}
+                disabled={moving || !moveMonthInput}
+                className="px-4 py-2 rounded-md bg-amber-600 text-white text-sm font-medium hover:bg-amber-700 disabled:opacity-50"
+              >
+                {moving ? 'Moving Week...' : 'Move Week'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
